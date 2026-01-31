@@ -1,0 +1,22 @@
+[Unit]
+Description=Cloudflare Tunnel
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# 请将 YOUR_TUNNEL_TOKEN 替换为实际的 Cloudflare Tunnel Token
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token YOUR_TUNNEL_TOKEN
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloudflared
+
+[Install]
+WantedBy=multi-user.target

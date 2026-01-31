@@ -1,0 +1,79 @@
+# 定期检查上游仓库是否有新版本发布
+name: Check Upstream Release
+
+on:
+  schedule:
+    # 每小时检查一次
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: '强制构建指定版本 (例如: v2.5.2)'
+        required: false
+        type: string
+
+env:
+  UPSTREAM_REPO: remnawave/node
+
+jobs:
+  check-upstream:
+    name: Check for new upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check upstream release
+        id: check
+        run: |
+          # 获取上游最新版本
+          UPSTREAM_VERSION=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest" | jq -r '.tag_name')
+          echo "Upstream version: $UPSTREAM_VERSION"
+          
+          # 如果手动指定了版本
+          if [[ -n "${{ github.event.inputs.force_version }}" ]]; then
+            UPSTREAM_VERSION="${{ github.event.inputs.force_version }}"
+            echo "Forced version: $UPSTREAM_VERSION"
+          fi
+          
+          # 获取本仓库最新版本
+          LOCAL_VERSION=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/latest" 2>/dev/null | jq -r '.tag_name // "none"')
+          echo "Local version: $LOCAL_VERSION"
+          
+          # 比较版本
+          if [[ "$UPSTREAM_VERSION" != "$LOCAL_VERSION" ]] || [[ -n "${{ github.event.inputs.force_version }}" ]]; then
+            echo "New version available: $UPSTREAM_VERSION"
+            echo "new_version=$UPSTREAM_VERSION" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "Already up to date"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+  
+  trigger-build:
+    name: Trigger build workflow
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger build and release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build-release.yml',
+              ref: 'main',
+              inputs: {
+                version: '${{ needs.check-upstream.outputs.new_version }}'
+              }
+            });
+            console.log('Build workflow triggered for version: ${{ needs.check-upstream.outputs.new_version }}');

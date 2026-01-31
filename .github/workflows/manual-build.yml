@@ -1,0 +1,157 @@
+# 手动触发构建（用于测试或构建特定版本）
+name: Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: v2.5.2，留空则使用上游最新版本)'
+        required: false
+        type: string
+      skip_release:
+        description: '跳过发布（仅构建测试）'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  UPSTREAM_REPO: remnawave/node
+  NODE_VERSION: '20'
+
+jobs:
+  get-version:
+    name: Get version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest" | jq -r '.tag_name')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Print version
+        run: echo "Building version ${{ steps.version.outputs.version }}"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: get-version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Clone upstream
+        run: |
+          VERSION=${{ needs.get-version.outputs.version }}
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/${{ env.UPSTREAM_REPO }}.git upstream || \
+          git clone --depth 1 https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
+      
+      - name: Install and build
+        working-directory: upstream
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+      
+      - name: Package
+        run: |
+          VERSION=${{ needs.get-version.outputs.version }}
+          ARCH=${{ matrix.arch }}
+          
+          mkdir -p release
+          cp -r upstream/dist release/
+          cp -r upstream/libs release/
+          cp upstream/package*.json release/
+          
+          cd release
+          tar -czvf ../rw-node-${VERSION}-linux-${ARCH}.tar.gz .
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rw-node-${{ needs.get-version.outputs.version }}-linux-${{ matrix.arch }}
+          path: rw-node-${{ needs.get-version.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: [get-version, build]
+    if: ${{ github.event.inputs.skip_release != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Prepare files
+        run: |
+          mkdir -p release-files
+          find artifacts -name "*.tar.gz" -exec mv {} release-files/ \;
+          cd release-files
+          sha256sum *.tar.gz > checksums.txt
+      
+      - name: Get release notes
+        id: notes
+        run: |
+          NOTES=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/tags/${{ needs.get-version.outputs.version }}" | jq -r '.body // ""')
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.get-version.outputs.version }}
+          name: ${{ needs.get-version.outputs.version }}
+          draft: false
+          prerelease: false
+          body: |
+            ## RW-Node ${{ needs.get-version.outputs.version }}
+            
+            基于 [remnawave/node@${{ needs.get-version.outputs.version }}](https://github.com/remnawave/node/releases/tag/${{ needs.get-version.outputs.version }}) 构建。
+            
+            ### 一键安装
+            
+            ```bash
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh)
+            ```
+            
+            ### 上游更新日志
+            
+            ${{ steps.notes.outputs.notes }}
+          files: |
+            release-files/*.tar.gz
+            release-files/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

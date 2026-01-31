@@ -1,0 +1,30 @@
+[Unit]
+Description=Remnawave Node Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rw-node
+EnvironmentFile=/opt/rw-node/.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-http-header-size=65536
+
+# 使用启动脚本来正确设置环境变量和启动顺序
+ExecStart=/opt/rw-node/start.sh
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# 清理 socket 文件
+ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid'
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rw-node
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,168 @@
+# 构建并发布预编译包
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: v2.5.2)'
+        required: true
+        type: string
+
+env:
+  UPSTREAM_REPO: remnawave/node
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup QEMU for cross-compilation
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Clone upstream repo
+        run: |
+          git clone --depth 1 --branch ${{ github.event.inputs.version }} \
+            https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
+      
+      - name: Install dependencies
+        working-directory: upstream
+        run: npm ci --legacy-peer-deps
+      
+      - name: Build
+        working-directory: upstream
+        run: npm run build
+      
+      - name: Prepare release package
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          ARCH=${{ matrix.arch }}
+          
+          mkdir -p release
+          
+          # 复制编译后的文件
+          cp -r upstream/dist release/
+          cp -r upstream/libs release/
+          cp upstream/package*.json release/
+          
+          # 创建压缩包
+          cd release
+          tar -czvf ../rw-node-${VERSION}-linux-${ARCH}.tar.gz .
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rw-node-${{ github.event.inputs.version }}-linux-${{ matrix.arch }}
+          path: rw-node-${{ github.event.inputs.version }}-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find artifacts -name "*.tar.gz" -exec mv {} release-files/ \;
+          ls -la release-files/
+      
+      - name: Generate checksums
+        run: |
+          cd release-files
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+      
+      - name: Get upstream release notes
+        id: release_notes
+        run: |
+          NOTES=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/tags/${{ github.event.inputs.version }}" | jq -r '.body // "No release notes available."')
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          body: |
+            ## RW-Node ${{ github.event.inputs.version }}
+            
+            基于上游 [remnawave/node@${{ github.event.inputs.version }}](https://github.com/remnawave/node/releases/tag/${{ github.event.inputs.version }}) 自动构建的轻量化部署包。
+            
+            ### 一键安装
+            
+            ```bash
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ github.event.inputs.version }}
+            ```
+            
+            ### 安装时启用 Cloudflare Tunnel
+            
+            ```bash
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ github.event.inputs.version }} --with-cloudflared
+            ```
+            
+            ### 下载文件
+            
+            | 架构 | 文件 |
+            |------|------|
+            | x86_64 (amd64) | `rw-node-${{ github.event.inputs.version }}-linux-amd64.tar.gz` |
+            | ARM64 (aarch64) | `rw-node-${{ github.event.inputs.version }}-linux-arm64.tar.gz` |
+            
+            ---
+            
+            ### 上游更新日志
+            
+            ${{ steps.release_notes.outputs.notes }}
+          files: |
+            release-files/*.tar.gz
+            release-files/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    name: Cleanup artifacts
+    needs: release
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Delete artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            rw-node-*
+          failOnError: false
