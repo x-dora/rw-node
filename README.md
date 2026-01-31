@@ -14,7 +14,9 @@
 - Linux 系统（Ubuntu/Debian/CentOS/RHEL/Fedora）
 - x86_64 或 arm64 架构
 - Root 权限
-- Node.js 22+（脚本会自动安装，需要支持 zstd 压缩）
+- curl 和 tar（大多数系统已预装）
+
+> 注：Node.js 和 Supervisord 会自动下载预编译二进制文件，**无需 Python**
 
 ## 快速安装
 

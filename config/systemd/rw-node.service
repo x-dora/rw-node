@@ -11,17 +11,14 @@ EnvironmentFile=/opt/rw-node/.env
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--max-http-header-size=65536
 
-# 使用启动脚本来正确设置环境变量和启动顺序
 ExecStart=/opt/rw-node/start.sh
 
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 
-# 清理 socket 和临时配置文件
 ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid /tmp/supervisord.conf'
 
-# 日志
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=rw-node
