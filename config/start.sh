@@ -11,16 +11,19 @@ LOG_DIR="/var/log/supervisor"
 
 echo "[Entrypoint] Starting..."
 
-# 生成随机凭据
+# 生成随机凭据（使用 dd 避免 broken pipe 警告）
 generate_random() {
-    tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 64
+    dd if=/dev/urandom bs=64 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 64
 }
 
 SUPERVISORD_USER=$(generate_random)
 SUPERVISORD_PASSWORD=$(generate_random)
 INTERNAL_REST_TOKEN=$(generate_random)
+SOCKETS_RNDSTR=$(head -c 20 /dev/urandom | xxd -p 2>/dev/null | head -c 10 || dd if=/dev/urandom bs=10 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' | head -c 10)
 
-export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN
+export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN SOCKETS_RNDSTR
+
+echo "[Credentials] OK"
 
 # 清理旧的 socket 文件
 rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid
@@ -40,7 +43,7 @@ logfile_maxbytes=5MB
 logfile_backups=2
 loglevel=info
 silent=true
-environment=INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN}",SUPERVISORD_USER="${SUPERVISORD_USER}",SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD}"
+environment=INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN}",SUPERVISORD_USER="${SUPERVISORD_USER}",SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD}",SOCKETS_RNDSTR="${SOCKETS_RNDSTR}"
 
 [unix_http_server]
 file=/run/supervisord.sock
