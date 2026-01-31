@@ -1,11 +1,11 @@
-# 构建并发布预编译包
-name: Build and Release
+# 可复用的构建工作流
+name: Build
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: '版本号 (例如: v2.5.2)'
+        description: '要构建的版本号'
         required: true
         type: string
 
@@ -40,7 +40,7 @@ jobs:
       
       - name: Clone upstream repo
         run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.version }} \
+          git clone --depth 1 --branch ${{ inputs.version }} \
             https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
       
       - name: Install dependencies
@@ -53,25 +53,22 @@ jobs:
       
       - name: Prepare release package
         run: |
-          VERSION=${{ github.event.inputs.version }}
+          VERSION=${{ inputs.version }}
           ARCH=${{ matrix.arch }}
           
           mkdir -p release
-          
-          # 复制编译后的文件
           cp -r upstream/dist release/
           cp -r upstream/libs release/
           cp upstream/package*.json release/
           
-          # 创建压缩包
           cd release
           tar -czvf ../rw-node-${VERSION}-linux-${ARCH}.tar.gz .
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rw-node-${{ github.event.inputs.version }}-linux-${{ matrix.arch }}
-          path: rw-node-${{ github.event.inputs.version }}-linux-${{ matrix.arch }}.tar.gz
+          name: rw-node-${{ inputs.version }}-linux-${{ matrix.arch }}
+          path: rw-node-${{ inputs.version }}-linux-${{ matrix.arch }}.tar.gz
           retention-days: 1
 
   release:
@@ -105,7 +102,7 @@ jobs:
       - name: Get upstream release notes
         id: release_notes
         run: |
-          NOTES=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/tags/${{ github.event.inputs.version }}" | jq -r '.body // "No release notes available."')
+          NOTES=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/tags/${{ inputs.version }}" | jq -r '.body // "No release notes available."')
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -113,34 +110,33 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: ${{ github.event.inputs.version }}
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
           draft: false
           prerelease: false
-          generate_release_notes: false
           body: |
-            ## RW-Node ${{ github.event.inputs.version }}
+            ## RW-Node ${{ inputs.version }}
             
-            基于上游 [remnawave/node@${{ github.event.inputs.version }}](https://github.com/remnawave/node/releases/tag/${{ github.event.inputs.version }}) 自动构建的轻量化部署包。
+            基于上游 [remnawave/node@${{ inputs.version }}](https://github.com/remnawave/node/releases/tag/${{ inputs.version }}) 自动构建的轻量化部署包。
             
             ### 一键安装
             
             ```bash
-            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ github.event.inputs.version }}
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ inputs.version }}
             ```
             
             ### 安装时启用 Cloudflare Tunnel
             
             ```bash
-            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ github.event.inputs.version }} --with-cloudflared
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ inputs.version }} --with-cloudflared
             ```
             
             ### 下载文件
             
             | 架构 | 文件 |
             |------|------|
-            | x86_64 (amd64) | `rw-node-${{ github.event.inputs.version }}-linux-amd64.tar.gz` |
-            | ARM64 (aarch64) | `rw-node-${{ github.event.inputs.version }}-linux-arm64.tar.gz` |
+            | x86_64 (amd64) | `rw-node-${{ inputs.version }}-linux-amd64.tar.gz` |
+            | ARM64 (aarch64) | `rw-node-${{ inputs.version }}-linux-arm64.tar.gz` |
             
             ---
             
@@ -154,7 +150,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   cleanup:
-    name: Cleanup artifacts
+    name: Cleanup
     needs: release
     runs-on: ubuntu-latest
     if: always()
@@ -163,6 +159,5 @@ jobs:
       - name: Delete artifacts
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: |
-            rw-node-*
+          name: rw-node-*
           failOnError: false

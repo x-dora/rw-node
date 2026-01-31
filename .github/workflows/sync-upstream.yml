@@ -1,5 +1,5 @@
 # 定期检查上游仓库是否有新版本发布
-name: Check Upstream Release
+name: Sync Upstream
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       force_version:
-        description: '强制构建指定版本 (例如: v2.5.2)'
+        description: '强制构建指定版本 (例如: 2.5.2)'
         required: false
         type: string
 
@@ -16,19 +16,14 @@ env:
   UPSTREAM_REPO: remnawave/node
 
 jobs:
-  check-upstream:
-    name: Check for new upstream release
+  check:
+    name: Check upstream
     runs-on: ubuntu-latest
     outputs:
-      new_version: ${{ steps.check.outputs.new_version }}
+      version: ${{ steps.check.outputs.version }}
       should_build: ${{ steps.check.outputs.should_build }}
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
       - name: Check upstream release
         id: check
         run: |
@@ -49,31 +44,19 @@ jobs:
           # 比较版本
           if [[ "$UPSTREAM_VERSION" != "$LOCAL_VERSION" ]] || [[ -n "${{ github.event.inputs.force_version }}" ]]; then
             echo "New version available: $UPSTREAM_VERSION"
-            echo "new_version=$UPSTREAM_VERSION" >> $GITHUB_OUTPUT
+            echo "version=$UPSTREAM_VERSION" >> $GITHUB_OUTPUT
             echo "should_build=true" >> $GITHUB_OUTPUT
           else
             echo "Already up to date"
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
-  
-  trigger-build:
-    name: Trigger build workflow
-    needs: check-upstream
-    if: needs.check-upstream.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Trigger build and release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'build-release.yml',
-              ref: 'main',
-              inputs: {
-                version: '${{ needs.check-upstream.outputs.new_version }}'
-              }
-            });
-            console.log('Build workflow triggered for version: ${{ needs.check-upstream.outputs.new_version }}');
+
+  build:
+    name: Build and Release
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+    permissions:
+      contents: write
