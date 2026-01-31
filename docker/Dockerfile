@@ -14,18 +14,14 @@ RUN apk add --no-cache git \
     && npm cache clean --force
 
 
-# Supervisord 构建阶段（从源码编译，避免 release 文件名问题）
-FROM golang:1.22-alpine AS supervisord-builder
-RUN apk add --no-cache git \
-    && go install github.com/ochinchina/supervisord@latest
-
-
-# 运行阶段 - 极简镜像
+# 运行阶段
 FROM node:24-alpine
 
 ARG XRAY_CORE_VERSION=v25.12.8
 ARG UPSTREAM_XRAY_REPO=XTLS
 ARG XRAY_CORE_INSTALL_SCRIPT=https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh
+ARG SUPERVISORD_VERSION=0.7.3
+ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
 LABEL org.opencontainers.image.description="Remnawave Node - Lightweight (No Python)"
@@ -45,9 +41,19 @@ COPY --from=build /opt/app/libs ./libs
 COPY --from=build /opt/app/node_modules ./node_modules
 COPY --from=build /opt/app/package*.json ./
 
-# 复制 Go 版 supervisord
-COPY --from=supervisord-builder /go/bin/supervisord /usr/local/bin/supervisord
-RUN chmod +x /usr/local/bin/supervisord
+# 安装 Go 版 supervisord（无需 Python）
+# 文件名格式: supervisord_0.7.3_Linux_64-bit.tar.gz / supervisord_0.7.3_Linux_ARM64.tar.gz
+RUN set -ex; \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        ARCH_NAME="ARM64"; \
+    else \
+        ARCH_NAME="64-bit"; \
+    fi; \
+    curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/v${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}.tar.gz" -o /tmp/supervisord.tar.gz; \
+    cd /tmp && tar -xzf supervisord.tar.gz; \
+    mv /tmp/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}/supervisord /usr/local/bin/supervisord; \
+    chmod +x /usr/local/bin/supervisord; \
+    rm -rf /tmp/*
 
 # 安装 Xray-core（使用官方脚本）
 RUN curl -fsSL ${XRAY_CORE_INSTALL_SCRIPT} | bash -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_XRAY_REPO} \
