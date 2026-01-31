@@ -25,16 +25,16 @@ check_root() {
 
 confirm_uninstall() {
     echo -e "${YELLOW}"
-    echo "=========================================="
-    echo "  警告: 即将卸载 RW-Node"
-    echo "=========================================="
+    echo -e "=========================================="
+    echo -e "  警告: 即将卸载 RW-Node"
+    echo -e "=========================================="
     echo -e "${NC}"
-    echo "将删除:"
-    echo "  - 安装目录: $INSTALL_DIR"
-    echo "  - 日志目录: $LOG_DIR"
-    echo "  - Systemd 服务"
-    echo "  - Xray-core, Supervisord"
-    echo ""
+    echo -e "将删除:"
+    echo -e "  - 安装目录: $INSTALL_DIR"
+    echo -e "  - 日志目录: $LOG_DIR"
+    echo -e "  - Systemd 服务"
+    echo -e "  - Xray-core, Supervisord"
+    echo -e ""
     
     read -p "继续? [y/N]: " confirm
     [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
@@ -83,16 +83,16 @@ remove_files() {
     # Node.js 符号链接
     [[ -L /usr/local/bin/node ]] && rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
     
-    # 运行时文件
-    rm -f /run/supervisord.sock /run/supervisord.pid /run/remnawave-internal.sock /tmp/supervisord.conf
+    # 运行时文件（带随机后缀）
+    rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf
     
     print_success "文件已删除"
 }
 
 main() {
     echo -e "${CYAN}=========================================="
-    echo "  RW-Node 卸载脚本"
-    echo "==========================================${NC}"
+    echo -e "  RW-Node 卸载脚本"
+    echo -e "==========================================${NC}"
     
     check_root
     confirm_uninstall
@@ -100,10 +100,10 @@ main() {
     remove_services
     remove_files
     
-    echo ""
+    echo -e ""
     echo -e "${GREEN}=========================================="
-    echo "  卸载完成!"
-    echo "==========================================${NC}"
+    echo -e "  卸载完成!"
+    echo -e "==========================================${NC}"
 }
 
 main "$@"
