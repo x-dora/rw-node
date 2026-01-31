@@ -14,12 +14,18 @@ RUN apk add --no-cache git \
     && npm cache clean --force
 
 
+# Supervisord 构建阶段（从源码编译，避免 release 文件名问题）
+FROM golang:1.22-alpine AS supervisord-builder
+RUN apk add --no-cache git \
+    && go install github.com/ochinchina/supervisord@latest
+
+
 # 运行阶段 - 极简镜像
 FROM node:24-alpine
 
 ARG XRAY_CORE_VERSION=v25.12.8
-ARG SUPERVISORD_VERSION=v0.7.3
-ARG TARGETARCH
+ARG UPSTREAM_XRAY_REPO=XTLS
+ARG XRAY_CORE_INSTALL_SCRIPT=https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh
 
 LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
 LABEL org.opencontainers.image.description="Remnawave Node - Lightweight (No Python)"
@@ -27,7 +33,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 WORKDIR /opt/app
 
-# 只安装必要的包（无 Python）
+# 安装必要的包（无 Python）
 RUN apk add --no-cache bash curl unzip
 
 # 创建日志目录
@@ -39,22 +45,13 @@ COPY --from=build /opt/app/libs ./libs
 COPY --from=build /opt/app/node_modules ./node_modules
 COPY --from=build /opt/app/package*.json ./
 
-# 安装 Go 版 supervisord（无需 Python）
-RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") \
-    && curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION#v}_linux_${ARCH}.tar.gz" \
-       | tar -xz -C /tmp \
-    && find /tmp -name "supervisord" -type f -exec mv {} /usr/local/bin/supervisord \; \
-    && chmod +x /usr/local/bin/supervisord \
-    && rm -rf /tmp/*
+# 复制 Go 版 supervisord
+COPY --from=supervisord-builder /go/bin/supervisord /usr/local/bin/supervisord
+RUN chmod +x /usr/local/bin/supervisord
 
-# 安装 Xray-core
-RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "64") \
-    && curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_CORE_VERSION}/Xray-linux-${ARCH}.zip" -o /tmp/xray.zip \
-    && unzip -q /tmp/xray.zip -d /tmp/xray \
-    && mv /tmp/xray/xray /usr/local/bin/xray \
-    && chmod +x /usr/local/bin/xray \
-    && ln -s /usr/local/bin/xray /usr/local/bin/rw-core \
-    && rm -rf /tmp/*
+# 安装 Xray-core（使用官方脚本）
+RUN curl -fsSL ${XRAY_CORE_INSTALL_SCRIPT} | bash -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_XRAY_REPO} \
+    && ln -sf /usr/local/bin/xray /usr/local/bin/rw-core
 
 # 创建辅助脚本
 RUN echo '#!/bin/bash' > /usr/local/bin/xlogs \

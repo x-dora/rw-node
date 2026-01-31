@@ -166,20 +166,49 @@ install_supervisord() {
     fi
     
     local arch=$(detect_arch)
-    local version=$(curl -fsSL "https://api.github.com/repos/ochinchina/supervisord/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    version=${version:-v0.7.3}
     
-    local url="https://github.com/ochinchina/supervisord/releases/download/${version}/supervisord_${version#v}_linux_${arch}.tar.gz"
+    # 尝试多种可能的文件名格式
+    local versions=("v0.7.3" "v0.7.2" "v0.7.1")
+    local downloaded=false
     
-    print_info "下载 Supervisord ${version}..."
+    for version in "${versions[@]}"; do
+        local ver_num="${version#v}"
+        
+        # 尝试不同的文件名格式
+        local urls=(
+            "https://github.com/ochinchina/supervisord/releases/download/${version}/supervisord_${ver_num}_linux_${arch}.tar.gz"
+            "https://github.com/ochinchina/supervisord/releases/download/${version}/supervisord-${ver_num}-linux-${arch}.tar.gz"
+            "https://github.com/ochinchina/supervisord/releases/download/${version}/supervisord_linux_${arch}.tar.gz"
+        )
+        
+        for url in "${urls[@]}"; do
+            print_info "尝试下载: $url"
+            if curl -fsSL "$url" -o /tmp/supervisord.tar.gz 2>/dev/null; then
+                cd /tmp && tar -xzf supervisord.tar.gz 2>/dev/null
+                if find /tmp -name "supervisord" -type f -exec mv {} /usr/local/bin/supervisord \; 2>/dev/null; then
+                    chmod +x /usr/local/bin/supervisord
+                    rm -rf /tmp/supervisord* /tmp/supervisord_*
+                    downloaded=true
+                    print_success "Supervisord ${version} 安装完成"
+                    break 2
+                fi
+            fi
+        done
+    done
     
-    curl -fsSL "$url" | tar -xz -C /tmp
-    find /tmp -name "supervisord" -type f -exec mv {} /usr/local/bin/supervisord \; 2>/dev/null
-    chmod +x /usr/local/bin/supervisord
+    if [[ "$downloaded" != "true" ]]; then
+        # 回退：从源码编译（需要 Go）
+        print_warning "预编译包下载失败，尝试从源码编译..."
+        if command -v go &> /dev/null; then
+            go install github.com/ochinchina/supervisord@latest
+            mv $(go env GOPATH)/bin/supervisord /usr/local/bin/supervisord
+        else
+            print_error "无法安装 Supervisord，请手动安装 Go 或下载 supervisord"
+            exit 1
+        fi
+    fi
     
     mkdir -p $LOG_DIR
-    
-    print_success "Supervisord 安装完成"
 }
 
 #######################################
