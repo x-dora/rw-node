@@ -18,8 +18,8 @@ Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 
-# 清理 socket 文件
-ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid'
+# 清理 socket 和临时配置文件
+ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid /tmp/supervisord.conf'
 
 # 日志
 StandardOutput=journal

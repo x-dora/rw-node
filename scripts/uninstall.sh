@@ -160,6 +160,7 @@ remove_files() {
     rm -f /run/supervisord.sock
     rm -f /run/supervisord.pid
     rm -f /run/remnawave-internal.sock
+    rm -f /tmp/supervisord.conf
 }
 
 #######################################

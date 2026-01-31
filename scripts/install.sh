@@ -121,7 +121,12 @@ install_dependencies() {
     
     case $OS in
         ubuntu|debian)
-            apt-get update -qq
+            # 尝试同步时间（如果 ntpdate 或 timedatectl 可用）
+            if command -v timedatectl &> /dev/null; then
+                timedatectl set-ntp true 2>/dev/null || true
+            fi
+            # 使用 -o Acquire::Check-Valid-Until=false 绕过时间检查问题
+            apt-get -o Acquire::Check-Valid-Until=false update -qq || apt-get update -qq || true
             apt-get install -y -qq curl wget unzip git python3 python3-pip python3-venv
             ;;
         centos|rhel|almalinux|rocky)
@@ -446,8 +451,44 @@ rm -f /run/supervisord.sock
 rm -f /run/remnawave-internal.sock
 rm -f /run/supervisord.pid
 
-# 启动 supervisord（后台运行）
-supervisord -c /etc/supervisord.conf &
+# 动态生成 supervisord 配置文件（将凭据直接写入配置）
+cat > /tmp/supervisord.conf << EOF
+[supervisord]
+nodaemon=true
+user=root
+logfile=/var/log/supervisor/supervisord.log
+pidfile=/var/run/supervisord.pid
+childlogdir=/var/log/supervisor
+logfile_maxbytes=5MB
+logfile_backups=2
+loglevel=info
+silent=true
+environment=INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN}",SUPERVISORD_USER="${SUPERVISORD_USER}",SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD}"
+
+[unix_http_server]
+file = /run/supervisord.sock
+username = ${SUPERVISORD_USER}
+password = ${SUPERVISORD_PASSWORD}
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[program:xray]
+command=/usr/local/bin/rw-core -config http+unix:///run/remnawave-internal.sock/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
+autostart=false
+autorestart=false
+stderr_logfile=/var/log/supervisor/xray.err.log
+stdout_logfile=/var/log/supervisor/xray.out.log
+stdout_logfile_maxbytes=5MB
+stderr_logfile_maxbytes=5MB
+stdout_logfile_backups=0
+stderr_logfile_backups=0
+EOF
+
+echo "[Entrypoint] Supervisord config generated"
+
+# 启动 supervisord（后台运行，使用生成的配置）
+supervisord -c /tmp/supervisord.conf &
 echo "[Entrypoint] Supervisord started successfully"
 
 # 等待 supervisord 就绪
@@ -458,7 +499,6 @@ echo "[Entrypoint] Getting Xray version..."
 XRAY_CORE_VERSION=$(/usr/local/bin/rw-core version | head -n 1)
 export XRAY_CORE_VERSION
 echo "[Entrypoint] Xray version: $XRAY_CORE_VERSION"
-echo "[Ports] XTLS_API_PORT: $XTLS_API_PORT"
 
 # 加载环境变量
 if [[ -f /opt/rw-node/.env ]]; then
@@ -466,6 +506,8 @@ if [[ -f /opt/rw-node/.env ]]; then
     source /opt/rw-node/.env
     set +a
 fi
+
+echo "[Ports] XTLS_API_PORT: $XTLS_API_PORT"
 
 # 启动 Node.js 应用
 echo "[Entrypoint] Starting Node.js application..."
@@ -505,8 +547,8 @@ Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 
-# 清理 socket 文件
-ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid'
+# 清理 socket 和临时配置文件
+ExecStopPost=/bin/bash -c 'rm -f /run/supervisord.sock /run/remnawave-internal.sock /run/supervisord.pid /tmp/supervisord.conf'
 
 # 日志
 StandardOutput=journal
