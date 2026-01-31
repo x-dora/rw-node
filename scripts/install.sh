@@ -283,12 +283,9 @@ install_rw_node() {
         return
     fi
     
-    # 解压
+    # 解压（预构建包已包含 node_modules，无需再安装依赖）
     tar -xzf rw-node.tar.gz
     rm -f rw-node.tar.gz
-    
-    # 安装依赖
-    npm ci --omit=dev --legacy-peer-deps
     
     print_success "RW-Node 安装完成"
 }

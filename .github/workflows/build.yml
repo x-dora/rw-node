@@ -51,6 +51,13 @@ jobs:
         working-directory: upstream
         run: npm run build
       
+      - name: Install production dependencies only
+        working-directory: upstream
+        run: |
+          # 清理开发依赖，只保留生产依赖
+          rm -rf node_modules
+          npm ci --omit=dev --legacy-peer-deps
+      
       - name: Prepare release package
         run: |
           VERSION=${{ inputs.version }}
@@ -59,6 +66,7 @@ jobs:
           mkdir -p release
           cp -r upstream/dist release/
           cp -r upstream/libs release/
+          cp -r upstream/node_modules release/
           cp upstream/package*.json release/
           
           cd release

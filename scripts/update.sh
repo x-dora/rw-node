@@ -162,12 +162,9 @@ update_rw_node() {
         mv dist /tmp/rw-node-old/ 2>/dev/null || true
         mv libs /tmp/rw-node-old/ 2>/dev/null || true
         
-        # 解压新文件
+        # 解压新文件（预构建包已包含 node_modules，无需再安装依赖）
         tar -xzf /tmp/rw-node-update.tar.gz
         rm -f /tmp/rw-node-update.tar.gz
-        
-        # 更新依赖
-        npm ci --omit=dev --legacy-peer-deps
         
         # 清理
         rm -rf /tmp/rw-node-old
