@@ -18,13 +18,13 @@ export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN SOCKETS_RNDSTR
 
 echo "[Credentials] OK"
 
-# 动态生成 supervisord 配置
+# 动态生成 supervisord 配置（socket 路径包含 SOCKETS_RNDSTR）
 cat > /tmp/supervisord.conf << EOF
 [supervisord]
 nodaemon=true
 user=root
 logfile=/var/log/supervisor/supervisord.log
-pidfile=/var/run/supervisord.pid
+pidfile=/var/run/supervisord-${SOCKETS_RNDSTR}.pid
 childlogdir=/var/log/supervisor
 logfile_maxbytes=5MB
 logfile_backups=2
@@ -33,7 +33,7 @@ silent=true
 environment=INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN}",SUPERVISORD_USER="${SUPERVISORD_USER}",SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD}",SOCKETS_RNDSTR="${SOCKETS_RNDSTR}"
 
 [unix_http_server]
-file=/run/supervisord.sock
+file=/run/supervisord-${SOCKETS_RNDSTR}.sock
 username=${SUPERVISORD_USER}
 password=${SUPERVISORD_PASSWORD}
 
@@ -41,7 +41,7 @@ password=${SUPERVISORD_PASSWORD}
 supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
 
 [program:xray]
-command=/usr/local/bin/rw-core -config http+unix:///run/remnawave-internal.sock/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
+command=/usr/local/bin/rw-core -config http+unix:///run/remnawave-internal-${SOCKETS_RNDSTR}.sock/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
 autostart=false
 autorestart=false
 stderr_logfile=/var/log/supervisor/xray.err.log
