@@ -14,7 +14,7 @@
 - Linux 系统（Ubuntu/Debian/CentOS/RHEL/Fedora）
 - x86_64 或 arm64 架构
 - Root 权限
-- Node.js 20+（脚本会自动安装）
+- Node.js 22+（脚本会自动安装，需要支持 zstd 压缩）
 
 ## 快速安装
 

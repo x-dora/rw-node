@@ -16,7 +16,7 @@ on:
 
 env:
   UPSTREAM_REPO: remnawave/node
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   get-version:

@@ -24,7 +24,7 @@ GITHUB_REPO="x-dora/rw-node"
 UPSTREAM_REPO="remnawave/node"
 XRAY_INSTALL_SCRIPT="https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh"
 DEFAULT_XRAY_VERSION="v25.12.8"
-DEFAULT_NODE_VERSION="20"
+DEFAULT_NODE_VERSION="22"
 
 # 参数默认值
 WITH_CLOUDFLARED=false
@@ -155,11 +155,11 @@ install_nodejs() {
     
     if command -v node &> /dev/null; then
         local node_version=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-        if [[ $node_version -ge 20 ]]; then
+        if [[ $node_version -ge 22 ]]; then
             print_info "Node.js $(node -v) 已安装"
             return 0
         else
-            print_warning "Node.js 版本过低，需要 v20+，当前版本: $(node -v)"
+            print_warning "Node.js 版本过低，需要 v22+（支持 zstd），当前版本: $(node -v)"
         fi
     fi
     
