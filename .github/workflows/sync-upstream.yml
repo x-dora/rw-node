@@ -60,3 +60,14 @@ jobs:
       version: ${{ needs.check.outputs.version }}
     permissions:
       contents: write
+
+  docker:
+    name: Build Docker Image
+    needs: [check, build]
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
