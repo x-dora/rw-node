@@ -19,7 +19,7 @@ GITHUB_REPO="x-dora/rw-node"
 UPSTREAM_REPO="remnawave/node"
 
 # 参数
-VERSION=""
+TARGET_VERSION=""
 FORCE=false
 
 print_info() {
@@ -79,10 +79,23 @@ get_current_version() {
 # 获取最新版本
 #######################################
 get_latest_version() {
-    local latest=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$latest" ]]; then
-        latest=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    local latest=""
+    local api_response=""
+    
+    # 首先尝试从本仓库获取
+    api_response=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null)
+    if [[ -n "$api_response" ]]; then
+        latest=$(echo "$api_response" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
     fi
+    
+    # 如果本仓库没有发布，则获取上游版本
+    if [[ -z "$latest" ]]; then
+        api_response=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null)
+        if [[ -n "$api_response" ]]; then
+            latest=$(echo "$api_response" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        fi
+    fi
+    
     echo "$latest"
 }
 
@@ -266,7 +279,7 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --version|-v)
-                VERSION="$2"
+                TARGET_VERSION="$2"
                 shift 2
                 ;;
             --force|-f)
@@ -309,7 +322,7 @@ main() {
     check_installation
     
     local current_version=$(get_current_version)
-    local target_version=${VERSION:-$(get_latest_version)}
+    local target_version="${TARGET_VERSION:-$(get_latest_version)}"
     
     print_info "当前版本: $current_version"
     print_info "目标版本: $target_version"
