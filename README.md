@@ -18,8 +18,8 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 
 | 标签 | 描述 | 大小 |
 |------|------|------|
-| `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | ~180MB |
-| `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~250MB |
+| `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | **~380MB** |
+| `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
 
 ```bash
 # 轻量版（推荐）
@@ -137,14 +137,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 
 ## 与官方镜像的区别
 
-| 特性 | 官方镜像 | 本项目镜像 |
-|------|----------|-----------|
-| Python | ✅ 需要 | ❌ 不需要 |
-| Supervisord | Python 版 | Go 版 (ochinchina/supervisord) |
-| 镜像大小 | ~300MB | ~200MB |
-| 依赖 | Python, pip | 无额外依赖 |
-| 容器环境检测 | ❌ | ✅ |
-| 健康检查 | ❌ | ✅ |
+| 特性 | 官方镜像 | 本项目轻量版 | 本项目官方兼容版 |
+|------|----------|-------------|-----------------|
+| Python | ✅ 需要 | ❌ 不需要 | ✅ 需要 |
+| Supervisord | Python 版 | Go 版 | Python 版 |
+| 镜像大小 | ~480MB | **~380MB** | ~450MB |
+| node_modules 优化 | ❌ | ✅ | ✅ |
+| 健康检查 | ❌ | ✅ | ✅ |
+| 容器环境检测 | ❌ | ✅ | ✅ |
 
 ## 目录结构
 
