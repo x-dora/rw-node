@@ -430,35 +430,72 @@ tail -n +1 -f /var/log/supervisor/xray.out.log' > /usr/local/bin/xlogs
 tail -n +1 -f /var/log/supervisor/xray.err.log' > /usr/local/bin/xerrors
     chmod +x /usr/local/bin/xerrors
     
-    # rw-node-status (根据环境调整)
-    if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
-        cat > /usr/local/bin/rw-node-status << 'EOF'
+    # rw-node-status (通用版本，显示详细信息)
+    cat > /usr/local/bin/rw-node-status << 'STATUSEOF'
 #!/bin/bash
-echo "=== RW-Node 状态 ==="
-systemctl status rw-node --no-pager
+INSTALL_DIR="/opt/rw-node"
+
+echo "=========================================="
+echo "          RW-Node 状态信息"
+echo "=========================================="
 echo ""
-echo "=== Xray 版本 ==="
-/usr/local/bin/rw-core version 2>/dev/null || echo "未安装"
-EOF
+
+# 版本信息
+if [[ -f "$INSTALL_DIR/package.json" ]]; then
+    VERSION=$(grep '"version"' "$INSTALL_DIR/package.json" | head -1 | cut -d'"' -f4)
+    echo "RW-Node 版本: $VERSION"
+else
+    echo "RW-Node 版本: 未知"
+fi
+
+XRAY_VER=$(/usr/local/bin/rw-core version 2>/dev/null | head -1 || echo "未安装")
+echo "Xray 版本: $XRAY_VER"
+
+NODE_VER=$("$INSTALL_DIR/node/bin/node" -v 2>/dev/null || node -v 2>/dev/null || echo "未知")
+echo "Node.js 版本: $NODE_VER"
+echo ""
+
+# 服务状态
+echo "=== 服务状态 ==="
+if command -v systemctl &>/dev/null && [[ -d /run/systemd/system ]]; then
+    if systemctl is-active --quiet rw-node 2>/dev/null; then
+        echo "RW-Node 服务: ✅ 运行中"
     else
-        cat > /usr/local/bin/rw-node-status << 'EOF'
-#!/bin/bash
-echo "=== RW-Node 状态 ==="
-if pgrep -f "node dist/src/main" > /dev/null; then
-    echo "RW-Node: 运行中"
+        echo "RW-Node 服务: ❌ 未运行"
+    fi
 else
-    echo "RW-Node: 未运行"
+    if pgrep -f "node dist/src/main" > /dev/null; then
+        echo "RW-Node 进程: ✅ 运行中"
+    else
+        echo "RW-Node 进程: ❌ 未运行"
+    fi
 fi
+
 if pgrep -f supervisord > /dev/null; then
-    echo "Supervisord: 运行中"
+    echo "Supervisord: ✅ 运行中"
 else
-    echo "Supervisord: 未运行"
+    echo "Supervisord: ❌ 未运行"
+fi
+
+if pgrep -f rw-core > /dev/null || pgrep -f xray > /dev/null; then
+    echo "Xray: ✅ 运行中"
+else
+    echo "Xray: ⏳ 待启动"
 fi
 echo ""
-echo "=== Xray 版本 ==="
-/usr/local/bin/rw-core version 2>/dev/null || echo "未安装"
-EOF
-    fi
+
+# 配置信息
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+    echo "=== 配置信息 ==="
+    NODE_PORT=$(grep -E "^NODE_PORT=" "$INSTALL_DIR/.env" | cut -d'=' -f2)
+    XTLS_API_PORT=$(grep -E "^XTLS_API_PORT=" "$INSTALL_DIR/.env" | cut -d'=' -f2)
+    echo "节点端口: ${NODE_PORT:-2222}"
+    echo "API 端口: ${XTLS_API_PORT:-61000}"
+fi
+echo ""
+echo "=========================================="
+STATUSEOF
+    chmod +x /usr/local/bin/rw-node-status
     chmod +x /usr/local/bin/rw-node-status
     
     # 容器/无systemd环境：创建启动/停止脚本
