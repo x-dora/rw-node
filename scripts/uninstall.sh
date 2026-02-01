@@ -10,8 +10,8 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-INSTALL_DIR="/opt/rw-node"
-LOG_DIR="/var/log/supervisor"
+# 支持自定义工作目录
+INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 
 print_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -33,9 +33,8 @@ confirm_uninstall() {
     echo -e "${NC}"
     echo -e "将删除:"
     echo -e "  - 安装目录: $INSTALL_DIR"
-    echo -e "  - 日志目录: $LOG_DIR"
     echo -e "  - Systemd 服务"
-    echo -e "  - Xray-core, Supervisord"
+    echo -e "  - 符号链接"
     echo -e ""
     
     read -p "继续? [y/N]: " confirm
@@ -51,6 +50,7 @@ stop_services() {
     systemctl stop cloudflared 2>/dev/null || true
     pkill -f supervisord 2>/dev/null || true
     pkill -f rw-core 2>/dev/null || true
+    pkill -f "node dist/src/main" 2>/dev/null || true
 }
 
 remove_services() {
@@ -69,31 +69,24 @@ remove_services() {
 remove_files() {
     print_info "删除文件..."
     
-    # 安装目录
+    # 删除安装目录（包含所有二进制、配置、日志）
     rm -rf "$INSTALL_DIR"
     print_success "安装目录已删除"
     
-    # 日志目录
-    rm -rf "$LOG_DIR"
-    
-    # 二进制文件
-    rm -f /usr/local/bin/xray
-    rm -f /usr/local/bin/rw-core
-    rm -f /usr/local/bin/supervisord
-    rm -f /usr/local/bin/cloudflared
+    # 删除符号链接
     rm -f /usr/local/bin/xlogs
     rm -f /usr/local/bin/xerrors
     rm -f /usr/local/bin/rw-node-status
     rm -f /usr/local/bin/rw-node-start
     rm -f /usr/local/bin/rw-node-stop
+    rm -f /usr/local/bin/node
+    rm -f /usr/local/bin/npm
+    rm -f /usr/local/bin/npx
     
-    # Node.js 符号链接
-    if [[ -L /usr/local/bin/node ]]; then
-        rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
-    fi
-    
-    # 运行时文件（带随机后缀）
-    rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf
+    # 兼容旧版：清理可能存在的系统目录
+    rm -f /usr/local/bin/xray /usr/local/bin/rw-core /usr/local/bin/supervisord /usr/local/bin/cloudflared 2>/dev/null || true
+    rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf 2>/dev/null || true
+    rm -rf /var/log/supervisor 2>/dev/null || true
     
     print_success "文件已删除"
 }

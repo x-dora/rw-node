@@ -11,7 +11,8 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-INSTALL_DIR="/opt/rw-node"
+# 支持自定义工作目录
+INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 GITHUB_REPO="x-dora/rw-node"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 UPSTREAM_REPO="remnawave/node"
@@ -158,6 +159,8 @@ update_scripts() {
     
     if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
         curl -fsSL "${GITHUB_RAW_URL}/config/systemd/rw-node.service" -o /etc/systemd/system/rw-node.service
+        # 替换工作目录占位符
+        sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" /etc/systemd/system/rw-node.service
         systemctl daemon-reload
     fi
     

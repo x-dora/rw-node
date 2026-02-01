@@ -134,6 +134,23 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | `NODE_PORT` | 节点端口 | `2222` |
 | `SECRET_KEY` | 面板密钥 | - |
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
+| `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
+
+### 自定义工作目录
+
+所有配置、日志、运行时文件都存放在工作目录中：
+
+```bash
+# 安装时指定工作目录
+RW_NODE_DIR=/data/rw-node bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh)
+
+# Docker 使用自定义目录
+docker run -d \
+  -e RW_NODE_DIR=/opt/app \
+  -e NODE_PORT=2222 \
+  -e SECRET_KEY=YOUR_KEY \
+  ghcr.io/x-dora/rw-node:latest
+```
 
 ## 与官方镜像的区别
 
@@ -148,20 +165,39 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 
 ## 目录结构
 
-```
-/opt/rw-node/
-├── .env              # 环境变量配置
-├── start.sh          # 启动脚本
-├── dist/             # 编译后的代码
-├── libs/             # 库文件
-├── node_modules/     # 依赖
-├── node/             # Node.js 二进制
-└── package.json
+所有文件统一存放在工作目录（默认 `/opt/rw-node`）：
 
-/var/log/supervisor/
-├── supervisord.log   # Supervisord 日志
-├── xray.out.log      # Xray 输出日志
-└── xray.err.log      # Xray 错误日志
+```
+${RW_NODE_DIR}/                 # 工作目录（默认 /opt/rw-node）
+├── .env                        # 环境变量配置
+├── start.sh                    # 启动脚本
+├── dist/                       # 编译后的代码
+├── libs/                       # 库文件
+├── node_modules/               # 依赖
+├── node/                       # Node.js 二进制
+├── package.json
+├── bin/                        # 可执行文件
+│   ├── xray                    # Xray 内核
+│   ├── rw-core -> xray         # Xray 符号链接
+│   ├── supervisord             # Supervisord (Go 版)
+│   ├── cloudflared             # Cloudflare Tunnel（可选）
+│   ├── xlogs                   # 日志查看脚本
+│   ├── xerrors                 # 错误日志脚本
+│   └── rw-node-status          # 状态查看脚本
+├── share/
+│   └── xray/                   # Xray 资源文件
+│       ├── geoip.dat
+│       └── geosite.dat
+├── conf/                       # 运行时配置
+│   └── supervisord.conf        # 动态生成
+├── run/                        # 运行时文件
+│   ├── supervisord-*.sock
+│   ├── supervisord-*.pid
+│   └── remnawave-internal-*.sock
+└── logs/                       # 日志文件
+    ├── supervisord.log
+    ├── xray.out.log
+    └── xray.err.log
 ```
 
 ## 许可证

@@ -17,9 +17,8 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 配置变量
-INSTALL_DIR="/opt/rw-node"
-LOG_DIR="/var/log/supervisor"
+# 配置变量（可通过环境变量覆盖）
+INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 GITHUB_REPO="x-dora/rw-node"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 UPSTREAM_REPO="remnawave/node"
@@ -213,7 +212,10 @@ install_nodejs() {
 install_supervisord() {
     print_step "安装 Supervisord..."
     
-    if [[ -x /usr/local/bin/supervisord ]]; then
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "${bin_dir}"
+    
+    if [[ -x "${bin_dir}/supervisord" ]]; then
         print_info "Supervisord 已安装"
         return 0
     fi
@@ -232,14 +234,13 @@ install_supervisord() {
     local url="https://github.com/ochinchina/supervisord/releases/download/v${version}/supervisord_${version}_Linux_${arch_name}.tar.gz"
     
     print_info "下载 Supervisord v${version}..."
-    print_info "下载地址: $url"
     
     cd /tmp
     if curl -fsSL "$url" -o supervisord.tar.gz; then
         tar -xzf supervisord.tar.gz
-        mv "supervisord_${version}_Linux_${arch_name}/supervisord" /usr/local/bin/supervisord 2>/dev/null || \
-        find /tmp -name "supervisord" -type f -exec mv {} /usr/local/bin/supervisord \;
-        chmod +x /usr/local/bin/supervisord
+        mv "supervisord_${version}_Linux_${arch_name}/supervisord" "${bin_dir}/supervisord" 2>/dev/null || \
+        find /tmp -name "supervisord" -type f -exec mv {} "${bin_dir}/supervisord" \;
+        chmod +x "${bin_dir}/supervisord"
         rm -rf /tmp/supervisord* /tmp/supervisord_*
         print_success "Supervisord v${version} 安装完成"
     else
@@ -247,7 +248,8 @@ install_supervisord() {
         exit 1
     fi
     
-    mkdir -p $LOG_DIR
+    # 创建工作目录结构
+    mkdir -p "${INSTALL_DIR}/logs" "${INSTALL_DIR}/run" "${INSTALL_DIR}/conf"
 }
 
 #######################################
@@ -256,15 +258,42 @@ install_supervisord() {
 install_xray() {
     print_step "安装 Xray-core..."
     
-    if [[ -x /usr/local/bin/xray ]]; then
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "${bin_dir}"
+    
+    if [[ -x "${bin_dir}/xray" ]]; then
         print_info "Xray-core 已安装"
-    else
-        curl -fsSL $XRAY_INSTALL_SCRIPT | bash -s -- ${XRAY_VERSION:-$DEFAULT_XRAY_VERSION} XTLS
+        ln -sf "${bin_dir}/xray" "${bin_dir}/rw-core" 2>/dev/null || true
+        return 0
     fi
     
-    ln -sf /usr/local/bin/xray /usr/local/bin/rw-core 2>/dev/null || true
+    local arch=$(detect_arch)
+    local version="${XRAY_VERSION:-$DEFAULT_XRAY_VERSION}"
+    local xray_arch=$([[ "$arch" == "arm64" ]] && echo "arm64-v8a" || echo "64")
     
-    print_success "Xray-core 安装完成"
+    print_info "下载 Xray-core ${version}..."
+    
+    local url="https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-${xray_arch}.zip"
+    
+    cd /tmp
+    if curl -fsSL "$url" -o xray.zip; then
+        unzip -q xray.zip -d xray_tmp
+        mv xray_tmp/xray "${bin_dir}/xray"
+        chmod +x "${bin_dir}/xray"
+        
+        # 复制 geo 文件
+        mkdir -p "${INSTALL_DIR}/share/xray"
+        mv xray_tmp/geo*.dat "${INSTALL_DIR}/share/xray/" 2>/dev/null || true
+        
+        # 创建 rw-core 符号链接
+        ln -sf "${bin_dir}/xray" "${bin_dir}/rw-core"
+        
+        rm -rf /tmp/xray.zip /tmp/xray_tmp
+        print_success "Xray-core ${version} 安装完成"
+    else
+        print_error "Xray-core 下载失败"
+        exit 1
+    fi
 }
 
 #######################################
@@ -334,12 +363,15 @@ download_configs() {
     
     # 只有在有 systemd 的非容器环境下才安装服务
     if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
-        # 下载 systemd 服务文件
+        # 下载 systemd 服务文件并替换工作目录占位符
         curl -fsSL "${GITHUB_RAW_URL}/config/systemd/rw-node.service" -o /etc/systemd/system/rw-node.service
+        sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" /etc/systemd/system/rw-node.service
         
         # 如果启用 cloudflared，下载其服务文件
         if [[ "$WITH_CLOUDFLARED" == "true" ]]; then
             curl -fsSL "${GITHUB_RAW_URL}/config/systemd/cloudflared.service" -o /etc/systemd/system/cloudflared.service
+            # 替换工作目录
+            sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" /etc/systemd/system/cloudflared.service
             # 替换 token
             if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
                 sed -i "s/YOUR_TUNNEL_TOKEN/${CLOUDFLARED_TOKEN}/g" /etc/systemd/system/cloudflared.service
@@ -401,11 +433,14 @@ install_cloudflared() {
     
     print_step "安装 Cloudflare Tunnel..."
     
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "${bin_dir}"
+    
     local arch=$(detect_arch)
     local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
     
-    curl -fsSL -o /usr/local/bin/cloudflared "$url"
-    chmod +x /usr/local/bin/cloudflared
+    curl -fsSL -o "${bin_dir}/cloudflared" "$url"
+    chmod +x "${bin_dir}/cloudflared"
     
     if [[ -n "$CLOUDFLARED_TOKEN" && "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
         systemctl enable cloudflared
@@ -420,20 +455,30 @@ install_cloudflared() {
 create_helper_scripts() {
     print_step "创建辅助脚本..."
     
+    local bin_dir="${INSTALL_DIR}/bin"
+    mkdir -p "${bin_dir}"
+    
     # xlogs
-    echo '#!/bin/bash
-tail -n +1 -f /var/log/supervisor/xray.out.log' > /usr/local/bin/xlogs
-    chmod +x /usr/local/bin/xlogs
+    cat > "${bin_dir}/xlogs" << 'EOF'
+#!/bin/bash
+WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+tail -n +1 -f "${WORK_DIR}/logs/xray.out.log"
+EOF
+    chmod +x "${bin_dir}/xlogs"
     
     # xerrors
-    echo '#!/bin/bash
-tail -n +1 -f /var/log/supervisor/xray.err.log' > /usr/local/bin/xerrors
-    chmod +x /usr/local/bin/xerrors
-    
-    # rw-node-status (通用版本，显示详细信息)
-    cat > /usr/local/bin/rw-node-status << 'STATUSEOF'
+    cat > "${bin_dir}/xerrors" << 'EOF'
 #!/bin/bash
-INSTALL_DIR="/opt/rw-node"
+WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+tail -n +1 -f "${WORK_DIR}/logs/xray.err.log"
+EOF
+    chmod +x "${bin_dir}/xerrors"
+    
+    # rw-node-status
+    cat > "${bin_dir}/rw-node-status" << 'STATUSEOF'
+#!/bin/bash
+INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+BIN_DIR="${INSTALL_DIR}/bin"
 
 echo "=========================================="
 echo "          RW-Node 状态信息"
@@ -448,7 +493,9 @@ else
     echo "RW-Node 版本: 未知"
 fi
 
-XRAY_VER=$(/usr/local/bin/rw-core version 2>/dev/null | head -1 || echo "未安装")
+XRAY_BIN="${BIN_DIR}/rw-core"
+[[ ! -x "$XRAY_BIN" ]] && XRAY_BIN="/usr/local/bin/rw-core"
+XRAY_VER=$("$XRAY_BIN" version 2>/dev/null | head -1 || echo "未安装")
 echo "Xray 版本: $XRAY_VER"
 
 NODE_VER=$("$INSTALL_DIR/node/bin/node" -v 2>/dev/null || node -v 2>/dev/null || echo "未知")
@@ -495,31 +542,39 @@ fi
 echo ""
 echo "=========================================="
 STATUSEOF
-    chmod +x /usr/local/bin/rw-node-status
-    chmod +x /usr/local/bin/rw-node-status
+    chmod +x "${bin_dir}/rw-node-status"
     
     # 容器/无systemd环境：创建启动/停止脚本
     if [[ "$HAS_SYSTEMD" != "true" || "$IS_CONTAINER" == "true" ]]; then
         # rw-node-start
-        cat > /usr/local/bin/rw-node-start << EOF
+        cat > "${bin_dir}/rw-node-start" << 'EOF'
 #!/bin/bash
-cd ${INSTALL_DIR}
-exec ${INSTALL_DIR}/start.sh
+WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+cd "${WORK_DIR}"
+exec "${WORK_DIR}/start.sh"
 EOF
-        chmod +x /usr/local/bin/rw-node-start
+        chmod +x "${bin_dir}/rw-node-start"
         
         # rw-node-stop
-        cat > /usr/local/bin/rw-node-stop << 'EOF'
+        cat > "${bin_dir}/rw-node-stop" << 'EOF'
 #!/bin/bash
+WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 echo "停止 RW-Node..."
 pkill -f "node dist/src/main" 2>/dev/null || true
 pkill -f supervisord 2>/dev/null || true
 pkill -f rw-core 2>/dev/null || true
-rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf
+rm -f "${WORK_DIR}/run"/*.sock "${WORK_DIR}/run"/*.pid "${WORK_DIR}/conf/supervisord.conf" 2>/dev/null || true
 echo "已停止"
 EOF
-        chmod +x /usr/local/bin/rw-node-stop
+        chmod +x "${bin_dir}/rw-node-stop"
     fi
+    
+    # 创建符号链接到 /usr/local/bin（全局访问）
+    for script in xlogs xerrors rw-node-status rw-node-start rw-node-stop; do
+        if [[ -x "${bin_dir}/${script}" ]]; then
+            ln -sf "${bin_dir}/${script}" "/usr/local/bin/${script}" 2>/dev/null || true
+        fi
+    done
     
     print_success "辅助脚本创建完成"
 }

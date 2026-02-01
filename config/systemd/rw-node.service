@@ -6,18 +6,22 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/rw-node
-EnvironmentFile=/opt/rw-node/.env
+
+# 工作目录由安装脚本动态替换
+Environment=RW_NODE_DIR=__INSTALL_DIR__
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=__INSTALL_DIR__/.env
 Environment=NODE_ENV=production
 Environment=NODE_OPTIONS=--max-http-header-size=65536
 
-ExecStart=/opt/rw-node/start.sh
+ExecStart=__INSTALL_DIR__/start.sh
 
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
 
-ExecStopPost=/bin/bash -c 'rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf'
+# 清理运行时文件
+ExecStopPost=/bin/bash -c 'rm -f __INSTALL_DIR__/run/*.sock __INSTALL_DIR__/run/*.pid __INSTALL_DIR__/conf/supervisord.conf 2>/dev/null || true'
 
 StandardOutput=journal
 StandardError=journal
