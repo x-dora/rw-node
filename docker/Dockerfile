@@ -1,6 +1,6 @@
 # 轻量版 Dockerfile - 使用 Go supervisord，无需 Python
-# 构建阶段
-FROM node:22-alpine AS build
+# 构建阶段 - 只在 amd64 上构建（JS 代码跨平台）
+FROM --platform=linux/amd64 node:22-alpine AS build
 WORKDIR /opt/app
 ARG UPSTREAM_REPO=remnawave/node
 ARG VERSION=main
@@ -34,7 +34,7 @@ WORKDIR /opt/app
 RUN apk add --no-cache bash curl unzip \
     && mkdir -p /var/log/supervisor
 
-# 复制构建产物
+# 复制构建产物（JS 代码跨平台，从 amd64 构建阶段复制）
 COPY --from=build /opt/app/dist ./dist
 COPY --from=build /opt/app/libs ./libs
 COPY --from=build /opt/app/node_modules ./node_modules
