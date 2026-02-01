@@ -8,6 +8,16 @@ on:
         description: '版本号 (例如: 2.5.2，留空则使用上游最新版本)'
         required: false
         type: string
+      build_release:
+        description: '构建 Release 包'
+        required: false
+        type: boolean
+        default: true
+      build_docker:
+        description: '构建 Docker 镜像'
+        required: false
+        type: boolean
+        default: true
 
 env:
   UPSTREAM_REPO: remnawave/node
@@ -33,11 +43,23 @@ jobs:
       - name: Print version
         run: echo "Building version ${{ steps.version.outputs.version }}"
 
-  build:
-    name: Build and Release
+  build-release:
+    name: Build Release
     needs: get-version
+    if: ${{ github.event.inputs.build_release == 'true' }}
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.get-version.outputs.version }}
     permissions:
       contents: write
+
+  build-docker:
+    name: Build Docker
+    needs: get-version
+    if: ${{ github.event.inputs.build_docker == 'true' }}
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      version: ${{ needs.get-version.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
