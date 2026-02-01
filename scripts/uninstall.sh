@@ -84,6 +84,8 @@ remove_files() {
     rm -f /usr/local/bin/xlogs
     rm -f /usr/local/bin/xerrors
     rm -f /usr/local/bin/rw-node-status
+    rm -f /usr/local/bin/rw-node-start
+    rm -f /usr/local/bin/rw-node-stop
     
     # Node.js 符号链接
     if [[ -L /usr/local/bin/node ]]; then

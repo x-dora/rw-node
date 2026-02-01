@@ -1,39 +1,48 @@
-#!/bin/bash
+#!/bin/sh
 
-set -e
+# 清理旧的 socket 文件
+rm -f /run/remnawave-internal-*.sock 2>/dev/null
+rm -f /run/supervisord-*.sock 2>/dev/null
+rm -f /run/supervisord-*.pid 2>/dev/null
 
 echo "[Entrypoint] Starting..."
 
-# 生成随机凭据（使用 dd 避免 broken pipe 警告）
+# 生成随机凭据
 generate_random() {
-    dd if=/dev/urandom bs=64 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 64
+    local length="${1:-64}"
+    tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length"
 }
 
-SUPERVISORD_USER=$(generate_random)
-SUPERVISORD_PASSWORD=$(generate_random)
-INTERNAL_REST_TOKEN=$(generate_random)
-SOCKETS_RNDSTR=$(head -c 20 /dev/urandom | xxd -p 2>/dev/null | head -c 10 || dd if=/dev/urandom bs=10 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' | head -c 10)
+RNDSTR=$(generate_random 10)
+SUPERVISORD_USER=$(generate_random 64)
+SUPERVISORD_PASSWORD=$(generate_random 64)
+INTERNAL_REST_TOKEN=$(generate_random 64)
 
-export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN SOCKETS_RNDSTR
+# 设置完整路径（新格式）
+INTERNAL_SOCKET_PATH=/run/remnawave-internal-${RNDSTR}.sock
+SUPERVISORD_SOCKET_PATH=/run/supervisord-${RNDSTR}.sock
+SUPERVISORD_PID_PATH=/run/supervisord-${RNDSTR}.pid
+
+export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN
+export INTERNAL_SOCKET_PATH SUPERVISORD_SOCKET_PATH SUPERVISORD_PID_PATH
 
 echo "[Credentials] OK"
 
-# 动态生成 supervisord 配置（socket 路径包含 SOCKETS_RNDSTR）
+# 动态生成 supervisord 配置
 cat > /tmp/supervisord.conf << EOF
 [supervisord]
 nodaemon=true
 user=root
 logfile=/var/log/supervisor/supervisord.log
-pidfile=/var/run/supervisord-${SOCKETS_RNDSTR}.pid
+pidfile=${SUPERVISORD_PID_PATH}
 childlogdir=/var/log/supervisor
 logfile_maxbytes=5MB
 logfile_backups=2
 loglevel=info
 silent=true
-environment=INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN}",SUPERVISORD_USER="${SUPERVISORD_USER}",SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD}",SOCKETS_RNDSTR="${SOCKETS_RNDSTR}"
 
 [unix_http_server]
-file=/run/supervisord-${SOCKETS_RNDSTR}.sock
+file=${SUPERVISORD_SOCKET_PATH}
 username=${SUPERVISORD_USER}
 password=${SUPERVISORD_PASSWORD}
 
@@ -41,7 +50,7 @@ password=${SUPERVISORD_PASSWORD}
 supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
 
 [program:xray]
-command=/usr/local/bin/rw-core -config http+unix:///run/remnawave-internal-${SOCKETS_RNDSTR}.sock/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
+command=/usr/local/bin/rw-core -config http+unix://${INTERNAL_SOCKET_PATH}/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
 autostart=false
 autorestart=false
 stderr_logfile=/var/log/supervisor/xray.err.log

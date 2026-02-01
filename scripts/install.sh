@@ -35,6 +35,10 @@ NODE_PORT="2222"
 SECRET_KEY=""
 XTLS_API_PORT="61000"
 
+# 环境检测
+IS_CONTAINER=false
+HAS_SYSTEMD=false
+
 #######################################
 # 打印函数
 #######################################
@@ -51,6 +55,53 @@ check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "此脚本需要 root 权限运行"
         exit 1
+    fi
+}
+
+#######################################
+# 检测容器环境
+#######################################
+detect_container() {
+    print_step "检测运行环境..."
+    
+    # 检测是否在容器中
+    if [[ -f /.dockerenv ]]; then
+        IS_CONTAINER=true
+        print_info "检测到 Docker 容器环境"
+    elif [[ -f /run/.containerenv ]]; then
+        IS_CONTAINER=true
+        print_info "检测到 Podman 容器环境"
+    elif grep -qE '(docker|lxc|kubepods|containerd)' /proc/1/cgroup 2>/dev/null; then
+        IS_CONTAINER=true
+        print_info "检测到容器环境 (cgroup)"
+    elif [[ -n "${container:-}" ]]; then
+        IS_CONTAINER=true
+        print_info "检测到容器环境 (环境变量)"
+    elif systemd-detect-virt --container &>/dev/null; then
+        IS_CONTAINER=true
+        print_info "检测到容器环境 (systemd-detect-virt)"
+    fi
+    
+    # 检测是否有 systemd
+    if command -v systemctl &>/dev/null && systemctl --version &>/dev/null 2>&1; then
+        # 进一步检查 systemd 是否真正运行
+        if [[ -d /run/systemd/system ]]; then
+            HAS_SYSTEMD=true
+            print_info "Systemd 可用"
+        else
+            print_info "Systemd 已安装但未运行"
+        fi
+    else
+        print_info "Systemd 不可用"
+    fi
+    
+    # 总结
+    if [[ "$IS_CONTAINER" == "true" ]]; then
+        print_warning "容器环境下将使用前台运行模式"
+    elif [[ "$HAS_SYSTEMD" == "true" ]]; then
+        print_info "将使用 Systemd 服务模式"
+    else
+        print_warning "无 Systemd，将使用前台运行模式"
     fi
 }
 
@@ -76,10 +127,9 @@ detect_os() {
     elif [[ -f /etc/redhat-release ]]; then
         OS="centos"
     else
-        print_error "无法检测操作系统"
-        exit 1
+        OS="unknown"
     fi
-    print_info "检测到操作系统: $OS $OS_VERSION"
+    print_info "检测到操作系统: $OS ${OS_VERSION:-}"
 }
 
 #######################################
@@ -97,6 +147,9 @@ check_dependencies() {
                 ;;
             centos|rhel|almalinux|rocky|fedora)
                 yum install -y -q curl 2>/dev/null || dnf install -y -q curl
+                ;;
+            alpine)
+                apk add --no-cache curl
                 ;;
         esac
     fi
@@ -279,19 +332,22 @@ download_configs() {
     curl -fsSL "${GITHUB_RAW_URL}/config/start.sh" -o $INSTALL_DIR/start.sh
     chmod +x $INSTALL_DIR/start.sh
     
-    # 下载 systemd 服务文件
-    curl -fsSL "${GITHUB_RAW_URL}/config/systemd/rw-node.service" -o /etc/systemd/system/rw-node.service
-    
-    # 如果启用 cloudflared，下载其服务文件
-    if [[ "$WITH_CLOUDFLARED" == "true" ]]; then
-        curl -fsSL "${GITHUB_RAW_URL}/config/systemd/cloudflared.service" -o /etc/systemd/system/cloudflared.service
-        # 替换 token
-        if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
-            sed -i "s/YOUR_TUNNEL_TOKEN/${CLOUDFLARED_TOKEN}/g" /etc/systemd/system/cloudflared.service
+    # 只有在有 systemd 的非容器环境下才安装服务
+    if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
+        # 下载 systemd 服务文件
+        curl -fsSL "${GITHUB_RAW_URL}/config/systemd/rw-node.service" -o /etc/systemd/system/rw-node.service
+        
+        # 如果启用 cloudflared，下载其服务文件
+        if [[ "$WITH_CLOUDFLARED" == "true" ]]; then
+            curl -fsSL "${GITHUB_RAW_URL}/config/systemd/cloudflared.service" -o /etc/systemd/system/cloudflared.service
+            # 替换 token
+            if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
+                sed -i "s/YOUR_TUNNEL_TOKEN/${CLOUDFLARED_TOKEN}/g" /etc/systemd/system/cloudflared.service
+            fi
         fi
+        
+        systemctl daemon-reload
     fi
-    
-    systemctl daemon-reload
     
     print_success "配置文件下载完成"
 }
@@ -339,7 +395,9 @@ EOF
 # 安装 Cloudflared
 #######################################
 install_cloudflared() {
-    [[ "$WITH_CLOUDFLARED" != "true" ]] && return 0
+    if [[ "$WITH_CLOUDFLARED" != "true" ]]; then
+        return 0
+    fi
     
     print_step "安装 Cloudflare Tunnel..."
     
@@ -349,7 +407,7 @@ install_cloudflared() {
     curl -fsSL -o /usr/local/bin/cloudflared "$url"
     chmod +x /usr/local/bin/cloudflared
     
-    if [[ -n "$CLOUDFLARED_TOKEN" ]]; then
+    if [[ -n "$CLOUDFLARED_TOKEN" && "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
         systemctl enable cloudflared
     fi
     
@@ -372,8 +430,9 @@ tail -n +1 -f /var/log/supervisor/xray.out.log' > /usr/local/bin/xlogs
 tail -n +1 -f /var/log/supervisor/xray.err.log' > /usr/local/bin/xerrors
     chmod +x /usr/local/bin/xerrors
     
-    # rw-node-status
-    cat > /usr/local/bin/rw-node-status << 'EOF'
+    # rw-node-status (根据环境调整)
+    if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
+        cat > /usr/local/bin/rw-node-status << 'EOF'
 #!/bin/bash
 echo "=== RW-Node 状态 ==="
 systemctl status rw-node --no-pager
@@ -381,7 +440,49 @@ echo ""
 echo "=== Xray 版本 ==="
 /usr/local/bin/rw-core version 2>/dev/null || echo "未安装"
 EOF
+    else
+        cat > /usr/local/bin/rw-node-status << 'EOF'
+#!/bin/bash
+echo "=== RW-Node 状态 ==="
+if pgrep -f "node dist/src/main" > /dev/null; then
+    echo "RW-Node: 运行中"
+else
+    echo "RW-Node: 未运行"
+fi
+if pgrep -f supervisord > /dev/null; then
+    echo "Supervisord: 运行中"
+else
+    echo "Supervisord: 未运行"
+fi
+echo ""
+echo "=== Xray 版本 ==="
+/usr/local/bin/rw-core version 2>/dev/null || echo "未安装"
+EOF
+    fi
     chmod +x /usr/local/bin/rw-node-status
+    
+    # 容器/无systemd环境：创建启动/停止脚本
+    if [[ "$HAS_SYSTEMD" != "true" || "$IS_CONTAINER" == "true" ]]; then
+        # rw-node-start
+        cat > /usr/local/bin/rw-node-start << EOF
+#!/bin/bash
+cd ${INSTALL_DIR}
+exec ${INSTALL_DIR}/start.sh
+EOF
+        chmod +x /usr/local/bin/rw-node-start
+        
+        # rw-node-stop
+        cat > /usr/local/bin/rw-node-stop << 'EOF'
+#!/bin/bash
+echo "停止 RW-Node..."
+pkill -f "node dist/src/main" 2>/dev/null || true
+pkill -f supervisord 2>/dev/null || true
+pkill -f rw-core 2>/dev/null || true
+rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf
+echo "已停止"
+EOF
+        chmod +x /usr/local/bin/rw-node-stop
+    fi
     
     print_success "辅助脚本创建完成"
 }
@@ -392,16 +493,23 @@ EOF
 start_service() {
     print_step "启动服务..."
     
-    systemctl enable rw-node
-    systemctl start rw-node
-    
-    sleep 3
-    
-    if systemctl is-active --quiet rw-node; then
-        print_success "服务启动成功"
+    if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
+        # Systemd 环境
+        systemctl enable rw-node
+        systemctl start rw-node
+        
+        sleep 3
+        
+        if systemctl is-active --quiet rw-node; then
+            print_success "服务启动成功"
+        else
+            print_error "服务启动失败，请查看日志: journalctl -u rw-node -f"
+            exit 1
+        fi
     else
-        print_error "服务启动失败，请查看日志: journalctl -u rw-node -f"
-        exit 1
+        # 容器或无 systemd 环境
+        print_warning "无 Systemd 或容器环境，不自动启动服务"
+        print_info "请手动运行: rw-node-start 或 ${INSTALL_DIR}/start.sh"
     fi
 }
 
@@ -416,11 +524,27 @@ print_completion() {
     echo "=========================================="
     echo -e "${NC}"
     echo ""
-    echo -e "${CYAN}服务管理:${NC}"
-    echo "  systemctl {start|stop|restart|status} rw-node"
+    
+    if [[ "$HAS_SYSTEMD" == "true" && "$IS_CONTAINER" != "true" ]]; then
+        echo -e "${CYAN}服务管理:${NC}"
+        echo "  systemctl {start|stop|restart|status} rw-node"
+        echo ""
+        echo -e "${CYAN}日志查看:${NC}"
+        echo "  journalctl -u rw-node -f"
+    else
+        echo -e "${CYAN}服务管理:${NC}"
+        echo "  启动: rw-node-start"
+        echo "  停止: rw-node-stop"
+        echo "  状态: rw-node-status"
+        echo ""
+        echo -e "${CYAN}前台运行:${NC}"
+        echo "  ${INSTALL_DIR}/start.sh"
+        echo ""
+        echo -e "${YELLOW}提示: 容器/无systemd环境下请使用 screen/tmux 或进程管理器运行${NC}"
+    fi
+    
     echo ""
     echo -e "${CYAN}日志查看:${NC}"
-    echo "  journalctl -u rw-node -f"
     echo "  xlogs / xerrors"
     echo ""
     echo -e "${CYAN}配置文件:${NC} $INSTALL_DIR/.env"
@@ -465,6 +589,7 @@ main() {
     
     parse_args "$@"
     check_root
+    detect_container
     detect_os
     check_dependencies
     install_nodejs
