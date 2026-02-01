@@ -57,7 +57,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ inputs.version }}${{ matrix.suffix }}
-            type=raw,value=latest${{ matrix.suffix }},enable=${{ matrix.variant == 'lite' }}
+            type=raw,value=latest${{ matrix.suffix }}
           labels: |
             org.opencontainers.image.description=${{ matrix.description }}
       
@@ -90,3 +90,4 @@ jobs:
           echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:latest\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:latest-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
