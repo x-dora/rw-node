@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 #######################################
 # RW-Node 卸载脚本
 #######################################
@@ -18,9 +16,13 @@ LOG_DIR="/var/log/supervisor"
 print_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 check_root() {
-    [[ $EUID -ne 0 ]] && { echo -e "${RED}[ERROR]${NC} 需要 root 权限"; exit 1; }
+    if [[ $EUID -ne 0 ]]; then
+        print_error "需要 root 权限"
+        exit 1
+    fi
 }
 
 confirm_uninstall() {
@@ -37,7 +39,10 @@ confirm_uninstall() {
     echo -e ""
     
     read -p "继续? [y/N]: " confirm
-    [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "已取消"
+        exit 0
+    fi
 }
 
 stop_services() {
@@ -81,7 +86,9 @@ remove_files() {
     rm -f /usr/local/bin/rw-node-status
     
     # Node.js 符号链接
-    [[ -L /usr/local/bin/node ]] && rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+    if [[ -L /usr/local/bin/node ]]; then
+        rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+    fi
     
     # 运行时文件（带随机后缀）
     rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf
