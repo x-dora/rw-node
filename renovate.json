@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Shanghai",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^\\.upstream-version$"],
+      "matchStrings": ["(?<currentValue>.+?)\\s*$"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "remnawave/node",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["remnawave/node"],
+      "automerge": true,
+      "automergeType": "pr",
+      "commitMessageTopic": "upstream {{depName}}",
+      "commitMessageExtra": "to {{newVersion}}"
+    }
+  ]
+}

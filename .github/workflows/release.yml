@@ -1,0 +1,94 @@
+# 统一的 Release 入口：
+# - 自动路径：Renovate 升级 `.upstream-version` 后 push 到 main 自动触发
+# - 手动路径：workflow_dispatch 手动强制构建指定版本
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.upstream-version'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空则读取 .upstream-version）'
+        required: false
+        type: string
+      build_release:
+        description: '构建 Release 包'
+        required: false
+        type: boolean
+        default: true
+      build_docker:
+        description: '构建 Docker 镜像'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  UPSTREAM_REPO: remnawave/node
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build_release: ${{ steps.v.outputs.build_release }}
+      build_docker: ${{ steps.v.outputs.build_docker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version and flags
+        id: v
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "build_release=${{ github.event.inputs.build_release }}" >> "$GITHUB_OUTPUT"
+            echo "build_docker=${{ github.event.inputs.build_docker }}"   >> "$GITHUB_OUTPUT"
+          else
+            VERSION=""
+            echo "build_release=true" >> "$GITHUB_OUTPUT"
+            echo "build_docker=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            if [[ ! -f .upstream-version ]]; then
+              echo "::error::.upstream-version 文件不存在且未提供 version 输入"
+              exit 1
+            fi
+            VERSION=$(tr -d '[:space:]' < .upstream-version)
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::无法解析版本号"
+            exit 1
+          fi
+
+          echo "Resolved version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build-release:
+    name: Build and Release
+    needs: resolve
+    if: ${{ needs.resolve.outputs.build_release == 'true' }}
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+    permissions:
+      contents: write
+
+  build-docker:
+    name: Build Docker Image
+    needs: [resolve, build-release]
+    if: |
+      !cancelled() &&
+      needs.resolve.outputs.build_docker == 'true' &&
+      (needs.build-release.result == 'success' || needs.build-release.result == 'skipped')
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
