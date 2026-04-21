@@ -66,9 +66,9 @@ services:
 - Linux（Ubuntu/Debian/CentOS/RHEL/Fedora/Alpine）
 - x86_64 或 arm64 架构
 - Root 权限
-- curl（大多数系统已预装）
+- bash 和 curl（大多数系统已预装）
 
-> Node.js 和 Supervisord 会自动下载预编译二进制文件，**无需 Python**
+> 安装器会自动补齐 git / unzip / jq / xz 等依赖，**无需 Python**
 
 #### 安装
 
@@ -80,7 +80,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) --with-cloudflared
 
 # 指定版本
-bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) --version 2.5.2
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/2.5.2/scripts/install.sh) --version 2.5.2
 
 # 静默安装（无交互）
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
@@ -138,15 +138,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 
 ### 自定义工作目录
 
-所有配置、日志、运行时文件都存放在工作目录中：
+所有配置、日志、运行时文件都存放在工作目录中（默认 `/opt/rw-node`）：
 
 ```bash
 # 安装时指定工作目录
 RW_NODE_DIR=/data/rw-node bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh)
 
-# Docker 使用自定义目录
+# Docker 使用默认工作目录（镜像内固定为 `/opt/rw-node`）
 docker run -d \
-  -e RW_NODE_DIR=/opt/app \
   -e NODE_PORT=2222 \
   -e SECRET_KEY=YOUR_KEY \
   ghcr.io/x-dora/rw-node:latest

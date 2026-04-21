@@ -1,43 +1,96 @@
 #!/bin/bash
 
+set -euo pipefail
+
 #######################################
 # RW-Node 启动脚本
 #######################################
 
-set -e
-
-# 可配置的工作目录（默认 /opt/rw-node）
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
-
-# 目录结构
 BIN_DIR="${WORK_DIR}/bin"
 LOG_DIR="${WORK_DIR}/logs"
 RUN_DIR="${WORK_DIR}/run"
 CONF_DIR="${WORK_DIR}/conf"
+NODE_PID_PATH="${RUN_DIR}/rw-node.pid"
 
-# 创建必要目录
 mkdir -p "${BIN_DIR}" "${LOG_DIR}" "${RUN_DIR}" "${CONF_DIR}"
 
-# 清理旧的 socket 文件
-rm -f "${RUN_DIR}"/remnawave-internal-*.sock 2>/dev/null
-rm -f "${RUN_DIR}"/supervisord-*.sock 2>/dev/null
-rm -f "${RUN_DIR}"/supervisord-*.pid 2>/dev/null
+rm -f "${RUN_DIR}"/remnawave-internal-*.sock 2>/dev/null || true
+rm -f "${RUN_DIR}"/supervisord-*.sock 2>/dev/null || true
+rm -f "${RUN_DIR}"/supervisord-*.pid 2>/dev/null || true
+rm -f "${NODE_PID_PATH}" 2>/dev/null || true
 
-echo "[Entrypoint] Starting..."
-echo "[Entrypoint] Work directory: ${WORK_DIR}"
-
-# 生成随机凭据
-generate_random() {
-    local length="${1:-64}"
-    dd if=/dev/urandom bs=256 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c "$length"
+load_env_file() {
+    if [[ -f "${WORK_DIR}/.env" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "${WORK_DIR}/.env"
+        set +a
+    fi
 }
 
-RNDSTR=$(generate_random 10)
-SUPERVISORD_USER=$(generate_random 64)
-SUPERVISORD_PASSWORD=$(generate_random 64)
-INTERNAL_REST_TOKEN=$(generate_random 64)
+generate_random() {
+    local length="${1:-64}"
+    local value
 
-# 设置完整路径（使用工作目录）
+    set +o pipefail
+    value=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length")
+    set -o pipefail
+    printf '%s' "$value"
+}
+
+find_binary() {
+    local name="$1"
+    local preferred="$2"
+
+    if [[ -n "$preferred" && -x "$preferred" ]]; then
+        echo "$preferred"
+        return 0
+    fi
+
+    if [[ -x "${BIN_DIR}/${name}" ]]; then
+        echo "${BIN_DIR}/${name}"
+        return 0
+    fi
+
+    if [[ -x "/usr/local/bin/${name}" ]]; then
+        echo "/usr/local/bin/${name}"
+        return 0
+    fi
+
+    if command -v "$name" >/dev/null 2>&1; then
+        command -v "$name"
+        return 0
+    fi
+
+    return 1
+}
+
+wait_for_socket() {
+    local socket_path="$1"
+    local pid="$2"
+    local i
+
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if [[ -S "$socket_path" ]]; then
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        sleep 1
+    done
+
+    return 1
+}
+
+load_env_file
+
+SUPERVISORD_USER="${SUPERVISORD_USER:-$(generate_random 64)}"
+SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD:-$(generate_random 64)}"
+INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN:-$(generate_random 64)}"
+RNDSTR="$(generate_random 10)"
+
 INTERNAL_SOCKET_PATH="${RUN_DIR}/remnawave-internal-${RNDSTR}.sock"
 SUPERVISORD_SOCKET_PATH="${RUN_DIR}/supervisord-${RNDSTR}.sock"
 SUPERVISORD_PID_PATH="${RUN_DIR}/supervisord-${RNDSTR}.pid"
@@ -45,24 +98,29 @@ SUPERVISORD_PID_PATH="${RUN_DIR}/supervisord-${RNDSTR}.pid"
 export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN
 export INTERNAL_SOCKET_PATH SUPERVISORD_SOCKET_PATH SUPERVISORD_PID_PATH
 
-echo "[Credentials] OK"
+if ! SUPERVISORD_BIN=$(find_binary supervisord ""); then
+    echo "[Entrypoint] ERROR: supervisord binary not found"
+    exit 1
+fi
 
-# 查找二进制文件路径（优先使用工作目录）
-find_binary() {
-    local name=$1
-    if [[ -x "${BIN_DIR}/${name}" ]]; then
-        echo "${BIN_DIR}/${name}"
-    elif [[ -x "/usr/local/bin/${name}" ]]; then
-        echo "/usr/local/bin/${name}"
-    else
-        echo "${name}"
-    fi
-}
+if ! XRAY_BIN=$(find_binary rw-core ""); then
+    echo "[Entrypoint] ERROR: rw-core binary not found"
+    exit 1
+fi
 
-SUPERVISORD_BIN=$(find_binary supervisord)
-XRAY_BIN=$(find_binary rw-core)
+if ! NODE_BIN=$(find_binary node "${WORK_DIR}/node/bin/node"); then
+    echo "[Entrypoint] ERROR: node binary not found"
+    exit 1
+fi
 
-# 动态生成 supervisord 配置
+if [[ -z "${SECRET_KEY:-}" ]]; then
+    echo "[Entrypoint] ERROR: SECRET_KEY is required"
+    exit 1
+fi
+
+echo "[Entrypoint] Starting..."
+echo "[Entrypoint] Work directory: ${WORK_DIR}"
+
 cat > "${CONF_DIR}/supervisord.conf" << EOF
 [supervisord]
 nodaemon=true
@@ -97,31 +155,22 @@ EOF
 
 echo "[Entrypoint] Config generated"
 
-# 启动 supervisord
 "${SUPERVISORD_BIN}" -c "${CONF_DIR}/supervisord.conf" &
-echo "[Entrypoint] Supervisord started"
-sleep 1
+SUPERVISORD_PID=$!
 
-# 获取 Xray 版本
+if ! wait_for_socket "${SUPERVISORD_SOCKET_PATH}" "${SUPERVISORD_PID}"; then
+    echo "[Entrypoint] ERROR: Supervisord failed to start"
+    exit 1
+fi
+
 XRAY_CORE_VERSION=$("${XRAY_BIN}" version 2>/dev/null | head -n 1 || echo "unknown")
 export XRAY_CORE_VERSION
-echo "[Entrypoint] Xray version: $XRAY_CORE_VERSION"
+export XTLS_API_PORT="${XTLS_API_PORT:-61000}"
 
-# 加载环境变量
-if [[ -f "${WORK_DIR}/.env" ]]; then
-    set -a
-    source "${WORK_DIR}/.env"
-    set +a
-fi
+echo "[Entrypoint] Supervisord started"
+echo "[Entrypoint] Xray version: ${XRAY_CORE_VERSION}"
+echo "[Entrypoint] XTLS_API_PORT: ${XTLS_API_PORT}"
 
-echo "[Entrypoint] XTLS_API_PORT: ${XTLS_API_PORT:-61000}"
-
-# 启动 Node.js 应用
-echo "[Entrypoint] Starting Node.js..."
 cd "${WORK_DIR}"
-
-if [[ -x "${WORK_DIR}/node/bin/node" ]]; then
-    exec "${WORK_DIR}/node/bin/node" dist/src/main
-else
-    exec node dist/src/main
-fi
+echo "$$" > "${NODE_PID_PATH}"
+exec "${NODE_BIN}" dist/src/main

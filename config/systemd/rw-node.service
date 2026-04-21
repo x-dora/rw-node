@@ -19,9 +19,10 @@ ExecStart=__INSTALL_DIR__/start.sh
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
+KillMode=control-group
 
 # 清理运行时文件
-ExecStopPost=/bin/bash -c 'rm -f __INSTALL_DIR__/run/*.sock __INSTALL_DIR__/run/*.pid __INSTALL_DIR__/conf/supervisord.conf 2>/dev/null || true'
+ExecStopPost=/bin/bash -c 'rm -f __INSTALL_DIR__/run/*.sock __INSTALL_DIR__/run/*.pid __INSTALL_DIR__/run/rw-node.pid __INSTALL_DIR__/conf/supervisord.conf 2>/dev/null || true'
 
 StandardOutput=journal
 StandardError=journal

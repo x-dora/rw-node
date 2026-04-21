@@ -7,8 +7,7 @@ ARG VERSION=main
 
 # 克隆源码并构建
 RUN apk add --no-cache git \
-    && git clone --depth 1 --branch ${VERSION} https://github.com/${UPSTREAM_REPO}.git . || \
-       git clone --depth 1 https://github.com/${UPSTREAM_REPO}.git . \
+    && git clone --depth 1 --single-branch --branch ${VERSION} https://github.com/${UPSTREAM_REPO}.git . \
     && npm ci --legacy-peer-deps \
     && npm run build \
     && npm ci --omit=dev --legacy-peer-deps \
@@ -44,7 +43,7 @@ LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
 LABEL org.opencontainers.image.description="Remnawave Node - Lightweight (No Python, Go Supervisord)"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
-WORKDIR /opt/app
+WORKDIR /opt/rw-node
 
 # 复制构建产物（JS 代码跨平台，从 amd64 构建阶段复制）
 COPY --from=build /opt/app/dist ./dist
@@ -54,8 +53,8 @@ COPY --from=build /opt/app/package*.json ./
 
 # 安装运行时依赖 + supervisord + xray-core（合并为一层）
 RUN set -ex; \
-    apk add --no-cache bash curl; \
-    mkdir -p /var/log/supervisor; \
+    apk add --no-cache bash curl unzip; \
+    mkdir -p /usr/local/share/xray; \
     \
     # 安装 Go supervisord
     if [ "${TARGETARCH}" = "arm64" ]; then \
@@ -65,27 +64,25 @@ RUN set -ex; \
         ARCH_NAME="64-bit"; \
         XRAY_ARCH="64"; \
     fi; \
-    curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/v${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}.tar.gz" \
-        | tar -xz -C /tmp; \
+    curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/v${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}.tar.gz" -o /tmp/supervisord.tar.gz; \
+    tar -xzf /tmp/supervisord.tar.gz -C /tmp; \
     mv /tmp/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}/supervisord /usr/local/bin/; \
     chmod +x /usr/local/bin/supervisord; \
     \
     # 直接下载 Xray-core（比官方脚本更精简）
-    XRAY_VER=$(echo ${XRAY_CORE_VERSION} | sed 's/^v//'); \
     curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_CORE_VERSION}/Xray-linux-${XRAY_ARCH}.zip" -o /tmp/xray.zip; \
     unzip -q /tmp/xray.zip -d /tmp/xray; \
     mv /tmp/xray/xray /usr/local/bin/xray; \
     chmod +x /usr/local/bin/xray; \
-    mkdir -p /usr/local/share/xray; \
     mv /tmp/xray/geo*.dat /usr/local/share/xray/ 2>/dev/null || true; \
     ln -sf /usr/local/bin/xray /usr/local/bin/rw-core; \
     \
     # 创建辅助脚本
-    printf '#!/bin/sh\ntail -n +1 -f /var/log/supervisor/xray.out.log\n' > /usr/local/bin/xlogs; \
-    printf '#!/bin/sh\ntail -n +1 -f /var/log/supervisor/xray.err.log\n' > /usr/local/bin/xerrors; \
+    printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.out.log"\n' > /usr/local/bin/xlogs; \
+    printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.err.log"\n' > /usr/local/bin/xerrors; \
     chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors; \
     \
-    # 清理（保留 curl 用于健康检查）
+    # 清理
     rm -rf /tmp/* /var/cache/apk/*
 
 # 复制 entrypoint
@@ -95,6 +92,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # 环境变量
 ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-http-header-size=65536"
+ENV RW_NODE_DIR=/opt/rw-node
 ENV XTLS_API_PORT=61000
 
 # 健康检查

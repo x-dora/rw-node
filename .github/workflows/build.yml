@@ -40,7 +40,7 @@ jobs:
       
       - name: Clone upstream repo
         run: |
-          git clone --depth 1 --branch ${{ inputs.version }} \
+          git clone --depth 1 --single-branch --branch ${{ inputs.version }} \
             https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
       
       - name: Install dependencies
@@ -130,13 +130,13 @@ jobs:
             ### 一键安装
             
             ```bash
-            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ inputs.version }}
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ inputs.version }}/scripts/install.sh) --version ${{ inputs.version }}
             ```
             
             ### 安装时启用 Cloudflare Tunnel
             
             ```bash
-            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh) --version ${{ inputs.version }} --with-cloudflared
+            bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ inputs.version }}/scripts/install.sh) --version ${{ inputs.version }} --with-cloudflared
             ```
             
             ### 下载文件
