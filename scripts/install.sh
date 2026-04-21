@@ -340,13 +340,17 @@ install_supervisord() {
 }
 
 install_xray() {
-    local arch version xray_arch url tmp_dir archive
+    local arch version xray_arch url tmp_dir archive asset_dir
 
     print_step "安装 Xray-core..."
 
     mkdir -p "${INSTALL_DIR}/bin"
+    asset_dir="${INSTALL_DIR}/share/xray"
+    mkdir -p "${asset_dir}"
 
-    if [[ -x "${INSTALL_DIR}/bin/xray" ]]; then
+    if [[ -x "${INSTALL_DIR}/bin/xray" ]] \
+        && [[ -f "${asset_dir}/geoip.dat" ]] \
+        && [[ -f "${asset_dir}/geosite.dat" ]]; then
         print_info "Xray-core 已安装"
         ln -sf "${INSTALL_DIR}/bin/xray" "${INSTALL_DIR}/bin/rw-core"
         return 0
@@ -366,13 +370,18 @@ install_xray() {
     curl -fsSL "$url" -o "$archive"
     unzip -q "$archive" -d "$tmp_dir/xray"
 
-    mv "$tmp_dir/xray/xray" "${INSTALL_DIR}/bin/xray"
-    chmod +x "${INSTALL_DIR}/bin/xray"
-    mkdir -p "${INSTALL_DIR}/share/xray"
-    mv "$tmp_dir"/xray/geo*.dat "${INSTALL_DIR}/share/xray/" 2>/dev/null || true
+    install -m 755 "$tmp_dir/xray/xray" "${INSTALL_DIR}/bin/xray"
+
+    if [[ ! -f "$tmp_dir/xray/geoip.dat" || ! -f "$tmp_dir/xray/geosite.dat" ]]; then
+        print_error "Xray 压缩包缺少 geoip.dat / geosite.dat"
+        exit 1
+    fi
+    install -m 644 "$tmp_dir/xray/geoip.dat"   "${asset_dir}/geoip.dat"
+    install -m 644 "$tmp_dir/xray/geosite.dat" "${asset_dir}/geosite.dat"
+
     ln -sf "${INSTALL_DIR}/bin/xray" "${INSTALL_DIR}/bin/rw-core"
 
-    print_success "Xray-core ${version} 安装完成"
+    print_success "Xray-core ${version} 安装完成 (assets: ${asset_dir})"
 }
 
 build_from_source() {

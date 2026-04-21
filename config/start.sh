@@ -11,9 +11,10 @@ BIN_DIR="${WORK_DIR}/bin"
 LOG_DIR="${WORK_DIR}/logs"
 RUN_DIR="${WORK_DIR}/run"
 CONF_DIR="${WORK_DIR}/conf"
+ASSET_DIR="${WORK_DIR}/share/xray"
 NODE_PID_PATH="${RUN_DIR}/rw-node.pid"
 
-mkdir -p "${BIN_DIR}" "${LOG_DIR}" "${RUN_DIR}" "${CONF_DIR}"
+mkdir -p "${BIN_DIR}" "${LOG_DIR}" "${RUN_DIR}" "${CONF_DIR}" "${ASSET_DIR}"
 
 rm -f "${RUN_DIR}"/remnawave-internal-*.sock 2>/dev/null || true
 rm -f "${RUN_DIR}"/supervisord-*.sock 2>/dev/null || true
@@ -143,6 +144,7 @@ supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
 
 [program:xray]
 command=${XRAY_BIN} -config http+unix://${INTERNAL_SOCKET_PATH}/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
+environment=XRAY_LOCATION_ASSET="${ASSET_DIR}"
 autostart=false
 autorestart=false
 stderr_logfile=${LOG_DIR}/xray.err.log
@@ -166,10 +168,18 @@ fi
 XRAY_CORE_VERSION=$("${XRAY_BIN}" version 2>/dev/null | head -n 1 || echo "unknown")
 export XRAY_CORE_VERSION
 export XTLS_API_PORT="${XTLS_API_PORT:-61000}"
+export XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${ASSET_DIR}}"
+
+if [[ ! -f "${XRAY_LOCATION_ASSET}/geoip.dat" || ! -f "${XRAY_LOCATION_ASSET}/geosite.dat" ]]; then
+    echo "[Entrypoint] WARNING: geoip.dat/geosite.dat missing in ${XRAY_LOCATION_ASSET}"
+    echo "[Entrypoint] Xray routing rules referencing geoip:*/geosite:* will fail to load."
+    echo "[Entrypoint] Re-run install.sh or place the files manually."
+fi
 
 echo "[Entrypoint] Supervisord started"
 echo "[Entrypoint] Xray version: ${XRAY_CORE_VERSION}"
 echo "[Entrypoint] XTLS_API_PORT: ${XTLS_API_PORT}"
+echo "[Entrypoint] XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
 
 cd "${WORK_DIR}"
 echo "$$" > "${NODE_PID_PATH}"
