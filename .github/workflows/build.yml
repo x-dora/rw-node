@@ -36,7 +36,7 @@ jobs:
       
       - name: Setup QEMU for cross-compilation
         if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       
       - name: Clone upstream repo
         run: |
