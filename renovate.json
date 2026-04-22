@@ -5,7 +5,9 @@
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["^\\.upstream-version$"],
+      "managerFilePatterns": [
+        "/^\\.upstream-version$/"
+      ],
       "matchStrings": ["(?<currentValue>.+?)\\s*$"],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "remnawave/node",
