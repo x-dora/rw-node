@@ -97,7 +97,7 @@ ENV XTLS_API_PORT=61000
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -ks --connect-timeout 2 --max-time 5 https://localhost:${NODE_PORT:-2222}/ >/dev/null || exit 1
+    CMD bash -c "</dev/tcp/127.0.0.1/${NODE_PORT:-2222}" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/src/main"]

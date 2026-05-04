@@ -141,6 +141,7 @@ ghcr.io/x-dora/rw-node:latest-paas-frp
 | `FRP_PROXY_NAME` | `rw-node-<随机字符>` | frp 代理唯一名称 |
 | `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
 | `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
+| `FRP_WAIT_FOR_NODE` | `true` | 启动 frpc 前是否等待 `NODE_PORT` TCP 可连接 |
 | `PORT` | - | 部分 PaaS 强制要求监听的 HTTP 健康检查端口 |
 | `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS FRP 镜像内应用文件目录，通常不要修改 |
 
@@ -169,7 +170,7 @@ vps.example.com:22001
 
 如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
-PaaS FRP 入口脚本会在启动 frpc 前等待 `NODE_PORT` 接受 HTTPS 连接。这个检查只要求 TCP/TLS 可连接，不要求 `/` 返回 2xx，因为 rw-node 根路径可能返回非 2xx 状态码。
+PaaS FRP 入口脚本会在启动 frpc 前等待 `NODE_PORT` 接受 TCP 连接；不会请求 HTTP 路径，也不会要求 TLS 握手成功。如果平台或上游行为导致探测仍不适用，可以设置 `FRP_WAIT_FOR_NODE=false` 直接启动 frpc。
 
 #### 新增节点流程
 
