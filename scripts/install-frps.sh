@@ -45,6 +45,12 @@ Options:
 
 Environment variables with the same names are also supported:
   FRP_TOKEN, FRP_VERSION, BIND_PORT, ALLOW_PORT_START, ALLOW_PORT_END
+
+Notes:
+  frpc can use FRP_TRANSPORT_PROTOCOL=websocket or wss against this same
+  bind port. The frp websocket path is fixed to /~!frp. For CDN/WSS usage,
+  expose frps directly on 443 or put Nginx/Caddy in front and proxy /~!frp
+  to this bind port.
 EOF
 }
 
@@ -269,6 +275,7 @@ main() {
     echo "Control port: ${BIND_PORT}/tcp"
     echo "Node port range: ${ALLOW_PORT_START}-${ALLOW_PORT_END}/tcp"
     echo "Open these ports in your VPS firewall/security group."
+    echo "For WSS/CDN mode, proxy wss://<frps-domain>/~!frp to the control port."
 }
 
 main "$@"

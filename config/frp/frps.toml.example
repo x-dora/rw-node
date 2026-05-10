@@ -4,3 +4,7 @@ auth.token = "REPLACE_WITH_STRONG_RANDOM_TOKEN"
 allowPorts = [
   { start = 22000, end = 22999 }
 ]
+
+# Optional:
+# frpc can connect to this same bindPort with transport.protocol = "websocket"
+# or "wss". The frp websocket path is fixed to /~!frp.

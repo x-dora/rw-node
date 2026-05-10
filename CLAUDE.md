@@ -47,6 +47,9 @@ PaaS FRP 版额外变量：
 
 - `FRP_SERVER_ADDR` — VPS 上 frps 的地址（必填）
 - `FRP_SERVER_PORT` — frps 控制端口（默认 7000）
+- `FRP_TRANSPORT_PROTOCOL` — frpc 连接 frps 的传输协议（默认 `tcp`，可选 `websocket`、`wss`；frp WebSocket 路径固定为 `/~!frp`）
+- `FRP_TLS_SERVER_NAME` — 可选，覆盖 WSS/TLS 连接校验使用的 SNI/ServerName；`wss` 模式不填时自动使用 `FRP_SERVER_ADDR`
+- `FRP_TLS_TRUSTED_CA_FILE` — 可选，挂载自定义 CA 后用于校验 frps 源站证书
 - `FRP_TOKEN` — frps/frpc 共享鉴权 token（必填）
 - `FRP_PROXY_NAME` — frp 代理唯一名称（可选；不填时自动生成 `rw-node-<随机字符>`，仅允许字母、数字、点、下划线、短横线）
 - `FRP_PROXY_NAME_PREFIX` — 自动生成 `FRP_PROXY_NAME` 时使用的前缀（默认 `rw-node`）
@@ -66,6 +69,7 @@ PaaS FRP 版额外变量：
 - 安装脚本需 root 权限运行，包含多发行版（Ubuntu/Debian/CentOS/RHEL/Fedora/Alpine）适配
 - Docker 镜像构建使用多阶段构建：amd64 平台构建 JS 代码，最终镜像跨平台运行
 - PaaS FRP 版必须保持 raw TCP 转发：Remnawave Panel → VPS `FRP_REMOTE_PORT` → frps → PaaS frpc → `127.0.0.1:NODE_PORT`，中间不能做 HTTPS 反代、TLS 终止、CDN HTTP 代理或证书替换，否则节点自签证书验证会失败
+- `FRP_TRANSPORT_PROTOCOL=wss` 只用于 `frpc -> frps` 回连链路，可经 HTTPS/CDN 到达 frps；Remnawave Panel 访问的 `FRP_REMOTE_PORT` 仍应是 VPS raw TCP 入口
 - PaaS FRP 版默认启动 HAProxy HTTP 前置用于 PaaS HTTP/HTTPS 回源场景：`${PORT:-3000}` → `/xh-*`（以 `/xh-` 开头）→ `127.0.0.1:8080`，`${PORT:-3000}` → `/ws-*`（以 `/ws-` 开头）→ `127.0.0.1:8880`；HAProxy 到 Xray 一律使用明文 HTTP
 - PaaS FRP 入口脚本的 readiness 只验证 `NODE_PORT` TCP 可连接，不应使用 HTTP 状态码或 TLS 握手作为启动 frpc 的条件；如平台行为特殊，可用 `FRP_WAIT_FOR_NODE=false` 跳过
 - `XTLS_API_PORT` 是内部端口，不应通过 Docker、frp、VPS 防火墙或 PaaS 入站公开

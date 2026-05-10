@@ -78,7 +78,7 @@ RUN set -ex; \
     rm -rf /tmp/* /var/cache/apk/*
 
 COPY docker-entrypoint.sh /usr/local/bin/
-COPY paas-haproxy-front.sh docker-entrypoint.paas-frp.sh /usr/local/bin/
+COPY paas-frp-client.sh paas-haproxy-front.sh docker-entrypoint.paas-frp.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.paas-frp.sh
 
 ENV NODE_ENV=production
@@ -88,6 +88,7 @@ ENV NODE_PORT=2222
 ENV XTLS_API_PORT=61000
 ENV FRP_ENABLED=true
 ENV FRP_SERVER_PORT=7000
+ENV FRP_TRANSPORT_PROTOCOL=tcp
 ENV FRP_WAIT_FOR_NODE=true
 ENV HTTP_FRONT_ENABLED=true
 ENV XHTTP_UPSTREAM_PORT=8080

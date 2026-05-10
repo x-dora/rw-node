@@ -84,6 +84,8 @@ Remnawave Panel -> VPS:FRP_REMOTE_PORT -> frps -> PaaS frpc -> 127.0.0.1:NODE_PO
 
 这条链路只做 TCP 转发，不做 HTTPS 反代或 TLS 终止，因此控制台仍会看到 rw-node 自己的自签证书。
 
+`frpc -> frps` 的控制/数据连接默认使用 TCP `7000`。如果 PaaS 出站网络只适合 HTTPS，或希望这段回连经过支持 WebSocket 的 CDN，可以把 PaaS 侧 `FRP_TRANSPORT_PROTOCOL` 改为 `websocket` 或 `wss`，通常配合 `FRP_SERVER_PORT=443`。这只改变容器回连 frps 的方式，不改变 Remnawave Panel 访问 `FRP_REMOTE_PORT` 的 raw TCP 节点入口。
+
 #### VPS 侧一次性配置 frps
 
 推荐直接使用仓库中的安装脚本：
@@ -109,6 +111,28 @@ allowPorts = [
 
 仓库也提供了示例文件：`config/frp/frps.toml.example` 和 `config/systemd/frps.service`。
 
+如果要让 `frpc -> frps` 走 WSS/CDN，可以让 frps 直接监听 `443`，或用 Nginx/Caddy 在 `443` 终止 HTTPS 后反代到本机 frps 控制端口。frp 的 WebSocket 请求路径固定为 `/~!frp`，Nginx 示例：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name frps.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/frps.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/frps.example.com/privkey.pem;
+
+    location /~!frp {
+        proxy_pass http://127.0.0.1:7000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
 启动服务：
 
 ```bash
@@ -122,6 +146,7 @@ sudo systemctl enable --now frps
 防火墙需要放行：
 
 - `7000/tcp`：PaaS 容器连接 `frps` 的控制端口
+- `443/tcp`：可选，`frpc -> frps` 使用 `wss` 并经 HTTPS/CDN 回连时使用
 - `22000-22999/tcp`：节点公网入口端口池
 
 新增 PaaS 节点时不需要再修改 VPS 的 `frps.toml`，只需要从端口池中分配一个未使用端口。
@@ -157,6 +182,9 @@ ghcr.io/x-dora/rw-node:latest-go-paas-frp
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
 | `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
 | `FRP_SERVER_PORT` | `7000` | frps 控制端口 |
+| `FRP_TRANSPORT_PROTOCOL` | `tcp` | frpc 连接 frps 的传输协议，可选 `tcp`、`websocket`、`wss` |
+| `FRP_TLS_SERVER_NAME` | `FRP_SERVER_ADDR` | 可选，覆盖 WSS/TLS 连接校验使用的 SNI/ServerName；`wss` 模式不填时自动使用 `FRP_SERVER_ADDR` |
+| `FRP_TLS_TRUSTED_CA_FILE` | - | 可选，挂载自定义 CA 后用于校验 frps 源站证书 |
 | `FRP_PROXY_NAME` | `rw-node-<随机字符>` | frp 代理唯一名称 |
 | `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
 | `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
@@ -178,6 +206,22 @@ docker run -d \
   -e XTLS_API_PORT=61000 \
   -e FRP_SERVER_ADDR=vps.example.com \
   -e FRP_SERVER_PORT=7000 \
+  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
+  -e FRP_REMOTE_PORT=22001 \
+  ghcr.io/x-dora/rw-node:latest-paas-frp
+```
+
+WSS/CDN 回连示例：
+
+```bash
+docker run -d \
+  --name rw-node-paas \
+  -e SECRET_KEY=YOUR_SECRET_KEY \
+  -e NODE_PORT=2222 \
+  -e XTLS_API_PORT=61000 \
+  -e FRP_SERVER_ADDR=frps.example.com \
+  -e FRP_SERVER_PORT=443 \
+  -e FRP_TRANSPORT_PROTOCOL=wss \
   -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
   -e FRP_REMOTE_PORT=22001 \
   ghcr.io/x-dora/rw-node:latest-paas-frp
@@ -316,6 +360,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
 | `FRP_SERVER_ADDR` | PaaS FRP 版使用的 frps 地址 | - |
 | `FRP_SERVER_PORT` | PaaS FRP 版使用的 frps 端口 | `7000` |
+| `FRP_TRANSPORT_PROTOCOL` | PaaS FRP 版 frpc 连接 frps 的传输协议，可选 `tcp`、`websocket`、`wss` | `tcp` |
+| `FRP_TLS_SERVER_NAME` | PaaS FRP 版 WSS/TLS 连接使用的 SNI/ServerName，`wss` 模式不填时自动使用 `FRP_SERVER_ADDR` | `FRP_SERVER_ADDR` |
+| `FRP_TLS_TRUSTED_CA_FILE` | PaaS FRP 版 WSS/TLS 连接使用的自定义 CA 文件路径 | - |
 | `FRP_TOKEN` | PaaS FRP 版使用的 frps token | - |
 | `FRP_PROXY_NAME` | PaaS FRP 版代理名称，不填则自动生成 | `rw-node-<随机字符>` |
 | `FRP_PROXY_NAME_PREFIX` | PaaS FRP 版自动代理名前缀 | `rw-node` |
