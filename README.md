@@ -20,8 +20,8 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 |------|------|------|
 | `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | **~380MB** |
 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
-| `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS 反向 TCP 隧道版 (内置 frpc + Caddy HTTP 前置) | ~400MB |
-| `ghcr.io/x-dora/rw-node:latest-go-paas-frp` | 非官方 Go 实现 PaaS 反向 TCP 隧道版 (内置 frpc + Caddy HTTP 前置) | 更小 |
+| `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS 反向 TCP 隧道版 (内置 frpc + HAProxy HTTP 前置) | ~400MB |
+| `ghcr.io/x-dora/rw-node:latest-go-paas-frp` | 非官方 Go 实现 PaaS 反向 TCP 隧道版 (内置 frpc + HAProxy HTTP 前置) | 更小 |
 
 ```bash
 # 轻量版（推荐）
@@ -67,14 +67,14 @@ services:
 
 如果想使用非官方的 Go 实现，可以改用 `latest-go-paas-frp`。Go 实现来自 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go)，版本跟随 `rw-node-go` 自己的 release，不跟随 `remnawave/node` 的上游版本号。
 
-PaaS 镜像默认还会启动 Caddy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound：
+PaaS 镜像默认还会启动 HAProxy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound：
 
 ```text
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /xh-* -> 127.0.0.1:8080
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /ws-* -> 127.0.0.1:8880
+PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /xh-* -> 127.0.0.1:8080
+PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /ws-* -> 127.0.0.1:8880
 ```
 
-这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。Caddy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。
+这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。
 
 连接链路：
 
@@ -161,9 +161,9 @@ ghcr.io/x-dora/rw-node:latest-go-paas-frp
 | `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
 | `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
 | `FRP_WAIT_FOR_NODE` | `true` | 启动 frpc 前是否等待 `NODE_PORT` TCP 可连接 |
-| `PORT` | - | PaaS 下发的 HTTP 回源端口；Caddy 优先监听该端口 |
-| `HTTP_FRONT_ENABLED` | `true` | 是否启动 Caddy HTTP 前置；设为 `false` 时回退为旧的简单 health server |
-| `HTTP_FRONT_PORT` | `${PORT:-3000}` | Caddy HTTP 前置监听端口，通常不需要手动设置 |
+| `PORT` | - | PaaS 下发的 HTTP 回源端口；HAProxy 优先监听该端口 |
+| `HTTP_FRONT_ENABLED` | `true` | 是否启动 HAProxy HTTP 前置；设为 `false` 时回退为旧的简单 health server |
+| `HTTP_FRONT_PORT` | `${PORT:-3000}` | HAProxy HTTP 前置监听端口，通常不需要手动设置 |
 | `XHTTP_UPSTREAM_PORT` | `8080` | `/xh-` 前缀流量转发到的本机 xhttp 明文 HTTP 端口 |
 | `WS_UPSTREAM_PORT` | `8880` | `/ws-` 前缀流量转发到的本机 WebSocket 明文 HTTP 端口 |
 | `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS FRP 镜像内应用文件目录，通常不要修改 |
@@ -206,11 +206,11 @@ vps.example.com:22001
 
 不要填写 PaaS 分配的 HTTP/HTTPS 域名，也不要经过 CDN/HTTPS 反向代理。
 
-如果使用 Caddy HTTP 前置承载 xhttp/ws 流量，则客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。xhttp inbound 固定监听本机 `8080` 明文 HTTP，ws inbound 固定监听本机 `8880` 明文 HTTP。`/xh`、`/xh/abc`、`/ws`、`/ws/abc` 不会匹配前置规则，只有以 `/xh-` 或 `/ws-` 开头的路径会被转发。
+如果使用 HAProxy HTTP 前置承载 xhttp/ws 流量，则客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。xhttp inbound 固定监听本机 `8080` 明文 HTTP，ws inbound 固定监听本机 `8880` 明文 HTTP。`/xh`、`/xh/abc`、`/ws`、`/ws/abc` 不会匹配前置规则，只有以 `/xh-` 或 `/ws-` 开头的路径会被转发。
 
 如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
-PaaS FRP 入口脚本会先启动 Caddy HTTP 前置，再启动 rw-node，然后在启动 frpc 前等待 `NODE_PORT` 接受 TCP 连接；frpc readiness 不会请求 HTTP 路径，也不会要求 TLS 握手成功。如果平台或上游行为导致探测仍不适用，可以设置 `FRP_WAIT_FOR_NODE=false` 直接启动 frpc。
+PaaS FRP 入口脚本会先启动 HAProxy HTTP 前置，再启动 rw-node，然后在启动 frpc 前等待 `NODE_PORT` 接受 TCP 连接；frpc readiness 不会请求 HTTP 路径，也不会要求 TLS 握手成功。如果平台或上游行为导致探测仍不适用，可以设置 `FRP_WAIT_FOR_NODE=false` 直接启动 frpc。
 
 #### 新增节点流程
 

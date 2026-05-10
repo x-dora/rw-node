@@ -13,9 +13,9 @@ fi
 
 CONF_DIR="${WORK_DIR}/conf"
 FRP_CONF_DIR="${CONF_DIR}/frp"
-CADDY_CONF_DIR="${CONF_DIR}/caddy"
+HAPROXY_CONF_DIR="${CONF_DIR}/haproxy"
 FRPC_BIN="/usr/local/bin/frpc"
-CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
+HAPROXY_BIN="${HAPROXY_BIN:-$(command -v haproxy 2>/dev/null || true)}"
 RW_NODE_ENTRYPOINT="/usr/local/bin/docker-entrypoint.sh"
 
 FRP_ENABLED="${FRP_ENABLED:-true}"
@@ -33,7 +33,7 @@ WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 app_pid=""
 frpc_pid=""
 health_pid=""
-caddy_pid=""
+haproxy_pid=""
 
 is_port() {
     local value="$1"
@@ -124,8 +124,8 @@ terminate() {
         kill "${health_pid}" 2>/dev/null || true
     fi
 
-    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" 2>/dev/null; then
-        kill "${caddy_pid}" 2>/dev/null || true
+    if [[ -n "${haproxy_pid}" ]] && kill -0 "${haproxy_pid}" 2>/dev/null; then
+        kill "${haproxy_pid}" 2>/dev/null || true
     fi
 
     wait 2>/dev/null || true
@@ -158,8 +158,8 @@ http.createServer((req, res) => {
     health_pid=$!
 }
 
-start_caddy_front() {
-    local config_path="${CADDY_CONF_DIR}/Caddyfile"
+start_haproxy_front() {
+    local config_path="${HAPROXY_CONF_DIR}/haproxy.cfg"
 
     if ! is_port "${HTTP_FRONT_PORT}"; then
         echo "[PaaS FRP] ERROR: HTTP_FRONT_PORT must be a valid TCP port"
@@ -181,50 +181,56 @@ start_caddy_front() {
         exit 1
     fi
 
-    if [[ ! -x "${CADDY_BIN}" ]]; then
-        echo "[PaaS FRP] ERROR: caddy binary not found"
+    if [[ ! -x "${HAPROXY_BIN}" ]]; then
+        echo "[PaaS FRP] ERROR: haproxy binary not found"
         exit 1
     fi
 
-    mkdir -p "${CADDY_CONF_DIR}"
+    mkdir -p "${HAPROXY_CONF_DIR}"
 
     cat > "${config_path}" << EOF
-{
-	auto_https off
-	admin off
-}
+global
+    maxconn 1024
+    nbthread 1
+    log stdout format raw local0 warning
 
-:${HTTP_FRONT_PORT} {
-	handle /health {
-		respond "ok\n" 200
-	}
+defaults
+    mode http
+    log global
+    option dontlognull
+    timeout connect 5s
+    timeout client 1h
+    timeout server 1h
+    timeout tunnel 1h
 
-	handle /xh-* {
-		reverse_proxy h2c://127.0.0.1:${XHTTP_UPSTREAM_PORT} {
-			flush_interval -1
-		}
-	}
+frontend http_front
+    bind *:${HTTP_FRONT_PORT}
+    acl is_health path -i /health
+    acl is_xh path_beg -i /xh-
+    acl is_ws path_beg -i /ws-
 
-	handle /ws-* {
-		reverse_proxy http://127.0.0.1:${WS_UPSTREAM_PORT} {
-			flush_interval -1
-		}
-	}
+    http-request return status 200 content-type text/plain string "ok\n" if is_health
+    use_backend xhttp_backend if is_xh
+    use_backend ws_backend if is_ws
+    http-request return status 404
 
-	handle {
-		respond 404
-	}
-}
+backend xhttp_backend
+    server xhttp 127.0.0.1:${XHTTP_UPSTREAM_PORT} proto h2
+
+backend ws_backend
+    option http-server-close
+    timeout tunnel 1h
+    server ws 127.0.0.1:${WS_UPSTREAM_PORT}
 EOF
 
-    "${CADDY_BIN}" validate --config "${config_path}" --adapter caddyfile
+    "${HAPROXY_BIN}" -c -f "${config_path}"
 
-    echo "[PaaS FRP] Starting Caddy HTTP front on port ${HTTP_FRONT_PORT}"
-    "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
-    caddy_pid=$!
+    echo "[PaaS FRP] Starting HAProxy HTTP front on port ${HTTP_FRONT_PORT}"
+    "${HAPROXY_BIN}" -W -db -f "${config_path}" &
+    haproxy_pid=$!
 
-    if ! wait_for_port "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
-        echo "[PaaS FRP] ERROR: Caddy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
+    if ! wait_for_port "${HTTP_FRONT_PORT}" "${haproxy_pid}"; then
+        echo "[PaaS FRP] ERROR: HAProxy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
         terminate
         exit 1
     fi
@@ -291,7 +297,7 @@ if ! is_port "${NODE_PORT}"; then
 fi
 
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
-    start_caddy_front
+    start_haproxy_front
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
 else
@@ -336,9 +342,9 @@ else
     exit 1
 fi
 
-if [[ -n "${frpc_pid}" && -n "${caddy_pid}" ]]; then
+if [[ -n "${frpc_pid}" && -n "${haproxy_pid}" ]]; then
     set +e
-    wait -n "${app_pid}" "${frpc_pid}" "${caddy_pid}"
+    wait -n "${app_pid}" "${frpc_pid}" "${haproxy_pid}"
     status=$?
     set -e
 elif [[ -n "${frpc_pid}" ]]; then
@@ -346,9 +352,9 @@ elif [[ -n "${frpc_pid}" ]]; then
     wait -n "${app_pid}" "${frpc_pid}"
     status=$?
     set -e
-elif [[ -n "${caddy_pid}" ]]; then
+elif [[ -n "${haproxy_pid}" ]]; then
     set +e
-    wait -n "${app_pid}" "${caddy_pid}"
+    wait -n "${app_pid}" "${haproxy_pid}"
     status=$?
     set -e
 else

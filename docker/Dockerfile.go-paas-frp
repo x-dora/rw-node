@@ -14,7 +14,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 WORKDIR /opt/rw-node-go
 
 RUN set -ex; \
-    apk add --no-cache bash busybox-extras caddy ca-certificates curl tar; \
+    apk add --no-cache bash busybox-extras ca-certificates curl haproxy tar; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         GO_ASSET="rw-node-go-linux-arm64-v8a.tar.gz"; \
         FRP_ARCH="arm64"; \
