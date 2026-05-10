@@ -16,6 +16,8 @@ FRP_CONF_DIR="${CONF_DIR}/frp"
 HAPROXY_CONF_DIR="${CONF_DIR}/haproxy"
 FRPC_BIN="/usr/local/bin/frpc"
 HAPROXY_BIN="${HAPROXY_BIN:-$(command -v haproxy 2>/dev/null || true)}"
+HAPROXY_FRONT_LIB="/usr/local/bin/paas-haproxy-front.sh"
+HAPROXY_LOG_PREFIX="[PaaS FRP]"
 RW_NODE_ENTRYPOINT="/usr/local/bin/docker-entrypoint.sh"
 
 FRP_ENABLED="${FRP_ENABLED:-true}"
@@ -158,83 +160,7 @@ http.createServer((req, res) => {
     health_pid=$!
 }
 
-start_haproxy_front() {
-    local config_path="${HAPROXY_CONF_DIR}/haproxy.cfg"
-
-    if ! is_port "${HTTP_FRONT_PORT}"; then
-        echo "[PaaS FRP] ERROR: HTTP_FRONT_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    if [[ "${HTTP_FRONT_PORT}" == "${NODE_PORT}" ]]; then
-        echo "[PaaS FRP] ERROR: HTTP_FRONT_PORT must differ from NODE_PORT"
-        exit 1
-    fi
-
-    if ! is_port "${XHTTP_UPSTREAM_PORT}"; then
-        echo "[PaaS FRP] ERROR: XHTTP_UPSTREAM_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    if ! is_port "${WS_UPSTREAM_PORT}"; then
-        echo "[PaaS FRP] ERROR: WS_UPSTREAM_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    if [[ ! -x "${HAPROXY_BIN}" ]]; then
-        echo "[PaaS FRP] ERROR: haproxy binary not found"
-        exit 1
-    fi
-
-    mkdir -p "${HAPROXY_CONF_DIR}"
-
-    cat > "${config_path}" << EOF
-global
-    maxconn 1024
-    nbthread 1
-    log stdout format raw local0 warning
-
-defaults
-    mode http
-    log global
-    option dontlognull
-    timeout connect 5s
-    timeout client 1h
-    timeout server 1h
-    timeout tunnel 1h
-
-frontend http_front
-    bind *:${HTTP_FRONT_PORT}
-    acl is_health path -i /health
-    acl is_xh path_beg -i /xh-
-    acl is_ws path_beg -i /ws-
-
-    http-request return status 200 content-type text/plain string "ok\n" if is_health
-    use_backend xhttp_backend if is_xh
-    use_backend ws_backend if is_ws
-    http-request return status 404
-
-backend xhttp_backend
-    server xhttp 127.0.0.1:${XHTTP_UPSTREAM_PORT} proto h2
-
-backend ws_backend
-    option http-server-close
-    timeout tunnel 1h
-    server ws 127.0.0.1:${WS_UPSTREAM_PORT}
-EOF
-
-    "${HAPROXY_BIN}" -c -f "${config_path}"
-
-    echo "[PaaS FRP] Starting HAProxy HTTP front on port ${HTTP_FRONT_PORT}"
-    "${HAPROXY_BIN}" -W -db -f "${config_path}" &
-    haproxy_pid=$!
-
-    if ! wait_for_port "${HTTP_FRONT_PORT}" "${haproxy_pid}"; then
-        echo "[PaaS FRP] ERROR: HAProxy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
-        terminate
-        exit 1
-    fi
-}
+source "${HAPROXY_FRONT_LIB}"
 
 generate_frpc_config() {
     local config_path="${FRP_CONF_DIR}/frpc.toml"
