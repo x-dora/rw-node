@@ -11,7 +11,7 @@ LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
 LABEL org.opencontainers.image.description="Remnawave Node Go Implementation - PaaS FRP TCP Tunnel"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
-WORKDIR /opt/rw-node-go
+WORKDIR /opt/rw-node
 
 RUN set -ex; \
     apk add --no-cache bash busybox-extras ca-certificates curl haproxy tar; \
@@ -32,7 +32,7 @@ RUN set -ex; \
     install -m 755 /tmp/rw-node-go/rw-node-go /usr/local/bin/rw-node-go; \
     install -m 644 /tmp/rw-node-go/geoip.dat /usr/local/share/xray/geoip.dat; \
     install -m 644 /tmp/rw-node-go/geosite.dat /usr/local/share/xray/geosite.dat; \
-    printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node-go/.rw-node-go-version; \
+    printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
     curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" -o /tmp/frp.tar.gz; \
     tar -xzf /tmp/frp.tar.gz -C /tmp; \
     install -m 755 "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}/frpc" /usr/local/bin/frpc; \
@@ -44,7 +44,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.go-paas-frp.sh
 ENV REQUIRE_SECRET_KEY=true
 ENV NODE_PORT=2222
 ENV INTERNAL_REST_PORT=61001
-ENV RW_NODE_DIR=/opt/rw-node-go
+ENV RW_NODE_DIR=/opt/rw-node
 ENV XRAY_LOCATION_ASSET=/usr/local/share/xray
 ENV FRP_ENABLED=true
 ENV FRP_SERVER_PORT=7000

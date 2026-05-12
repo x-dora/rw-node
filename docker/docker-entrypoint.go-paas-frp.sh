@@ -3,7 +3,7 @@
 set -euo pipefail
 
 APP_BIN="/usr/local/bin/rw-node-go"
-WORK_DIR="${RW_NODE_DIR:-/opt/rw-node-go}"
+WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 CONF_DIR="${WORK_DIR}/conf"
 FRP_CONF_DIR="${CONF_DIR}/frp"
 HAPROXY_CONF_DIR="${CONF_DIR}/haproxy"
