@@ -102,6 +102,7 @@ if [[ "$IMPL" == "go" ]]; then
 
     export REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
     export NODE_PORT="${NODE_PORT:-2222}"
+    export NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
     export INTERNAL_REST_PORT="${INTERNAL_REST_PORT:-61001}"
     export XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${ASSET_DIR}}"
     export RW_NODE_DIR="${WORK_DIR}"
@@ -113,6 +114,7 @@ if [[ "$IMPL" == "go" ]]; then
     echo "[Entrypoint] Starting rw-node-go..."
     echo "[Entrypoint] Work directory: ${WORK_DIR}"
     echo "[Entrypoint] NODE_PORT: ${NODE_PORT}"
+    echo "[Entrypoint] NODE_TLS_CLIENT_AUTH: ${NODE_TLS_CLIENT_AUTH}"
     echo "[Entrypoint] INTERNAL_REST_PORT: ${INTERNAL_REST_PORT}"
     echo "[Entrypoint] XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
 

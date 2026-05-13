@@ -34,6 +34,7 @@ NODE_PORT="2222"
 SECRET_KEY=""
 XTLS_API_PORT="61000"
 INTERNAL_REST_PORT="61001"
+NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
 
 IS_CONTAINER=false
 HAS_SYSTEMD=false
@@ -581,6 +582,16 @@ download_configs() {
 configure_env() {
     print_step "配置环境变量..."
 
+    if [[ "$INSTALL_IMPL" == "go" ]]; then
+        case "${NODE_TLS_CLIENT_AUTH}" in
+            mtls|optional|none) ;;
+            *)
+                print_error "NODE_TLS_CLIENT_AUTH 仅支持 mtls、optional 或 none"
+                exit 1
+                ;;
+        esac
+    fi
+
     if [[ -z "$SECRET_KEY" ]]; then
         if [[ ! -t 0 ]]; then
             print_error "SECRET_KEY 不能为空，请通过 --secret-key 提供"
@@ -616,6 +627,7 @@ configure_env() {
 ### VITALS ###
 NODE_PORT=${NODE_PORT}
 SECRET_KEY=${SECRET_KEY}
+NODE_TLS_CLIENT_AUTH=${NODE_TLS_CLIENT_AUTH}
 
 ### Internal (local) ports ###
 INTERNAL_REST_PORT=${INTERNAL_REST_PORT}
@@ -1036,6 +1048,14 @@ parse_args() {
                 INTERNAL_REST_PORT="$2"
                 shift 2
                 ;;
+            --node-tls-client-auth)
+                require_value "$1" "${2:-}"
+                case "$2" in
+                    mtls|optional|none) NODE_TLS_CLIENT_AUTH="$2" ;;
+                    *) print_error "--node-tls-client-auth 仅支持 mtls、optional 或 none"; exit 1 ;;
+                esac
+                shift 2
+                ;;
             --xtls-api-port)
                 require_value "$1" "${2:-}"
                 XTLS_API_PORT="$2"
@@ -1059,6 +1079,7 @@ parse_args() {
                 echo "  --port, -p <端口>            节点端口 (默认: 2222)"
                 echo "  --xtls-api-port <端口>       Xray API 端口 (默认: 61000)"
                 echo "  --internal-rest-port <端口>  Go 模式 Internal REST 端口 (默认: 61001)"
+                echo "  --node-tls-client-auth <模式> Go 模式 TLS 客户端证书策略: mtls|optional|none (默认: mtls)"
                 echo "  --secret-key, -k <密钥>      面板密钥"
                 echo "  --with-cloudflared           安装 Cloudflare Tunnel"
                 echo "  --cloudflared-token <令牌>   Cloudflare Tunnel Token"

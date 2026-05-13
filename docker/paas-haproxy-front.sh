@@ -49,11 +49,15 @@ frontend http_front
     acl is_health path -i /health
     acl is_xh path_beg -i /xh-
     acl is_ws path_beg -i /ws-
+    acl is_node_api path_beg -i /node/
+    acl is_vision_api path_beg -i /vision/
 
     http-request return status 200 content-type text/plain string "ok\n" if is_health
-    http-request return status 404 if !is_health !is_xh !is_ws
+    http-request return status 404 if !is_health !is_xh !is_ws !is_node_api !is_vision_api
     use_backend xhttp_backend if is_xh
     use_backend ws_backend if is_ws
+    use_backend node_api_backend if is_node_api
+    use_backend node_api_backend if is_vision_api
 
 backend xhttp_backend
     option http-no-delay
@@ -63,6 +67,10 @@ backend ws_backend
     option http-server-close
     timeout tunnel 1h
     server ws 127.0.0.1:${WS_UPSTREAM_PORT}
+
+backend node_api_backend
+    option http-server-close
+    server node_api 127.0.0.1:${NODE_PORT} ssl verify none
 EOF
 
     "${HAPROXY_BIN}" -c -f "${config_path}"

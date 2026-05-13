@@ -43,6 +43,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.go-paas-frp.sh
 
 ENV REQUIRE_SECRET_KEY=true
 ENV NODE_PORT=2222
+ENV NODE_TLS_CLIENT_AUTH=mtls
 ENV INTERNAL_REST_PORT=61001
 ENV RW_NODE_DIR=/opt/rw-node
 ENV XRAY_LOCATION_ASSET=/usr/local/share/xray

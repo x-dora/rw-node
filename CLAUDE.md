@@ -61,6 +61,7 @@ PaaS FRP 版额外变量：
 - `HTTP_FRONT_PORT` — HAProxy HTTP 前置监听端口（默认 `${PORT:-3000}`）
 - `XHTTP_UPSTREAM_PORT` — `/xh-` 前缀流量转发到的本机 xhttp 明文 HTTP 端口（默认 8080）
 - `WS_UPSTREAM_PORT` — `/ws-` 前缀流量转发到的本机 WebSocket 明文 HTTP 端口（默认 8880）
+- `NODE_TLS_CLIENT_AUTH` — Go 实现主 API 的 TLS 客户端证书策略（默认 `mtls`，可选 `optional`、`none`）
 - `RW_NODE_APP_DIR` — PaaS FRP 镜像内应用文件目录（默认 `/opt/rw-node`，通常不要修改）
 
 ## 注意事项
@@ -70,7 +71,7 @@ PaaS FRP 版额外变量：
 - Docker 镜像构建使用多阶段构建：amd64 平台构建 JS 代码，最终镜像跨平台运行
 - PaaS FRP 版必须保持 raw TCP 转发：Remnawave Panel → VPS `FRP_REMOTE_PORT` → frps → PaaS frpc → `127.0.0.1:NODE_PORT`，中间不能做 HTTPS 反代、TLS 终止、CDN HTTP 代理或证书替换，否则节点自签证书验证会失败
 - `FRP_TRANSPORT_PROTOCOL=wss` 只用于 `frpc -> frps` 回连链路，可经 HTTPS/CDN 到达 frps；Remnawave Panel 访问的 `FRP_REMOTE_PORT` 仍应是 VPS raw TCP 入口
-- PaaS FRP 版默认启动 HAProxy HTTP 前置用于 PaaS HTTP/HTTPS 回源场景：`${PORT:-3000}` → `/xh-*`（以 `/xh-` 开头）→ `127.0.0.1:8080`，`${PORT:-3000}` → `/ws-*`（以 `/ws-` 开头）→ `127.0.0.1:8880`；HAProxy 到 Xray 一律使用明文 HTTP
+- PaaS FRP 版默认启动 HAProxy HTTP 前置用于 PaaS HTTP/HTTPS 回源场景：`${PORT:-3000}` → `/xh-*`（以 `/xh-` 开头）→ `127.0.0.1:8080`，`${PORT:-3000}` → `/ws-*`（以 `/ws-` 开头）→ `127.0.0.1:8880`；HAProxy 到 Xray 一律使用明文 HTTP。`/node/*` 和 `/vision/*` 会转发到 `127.0.0.1:NODE_PORT` 的 HTTPS API，HAProxy 使用 `ssl verify none` 不校验节点自签证书
 - PaaS FRP 入口脚本的 readiness 只验证 `NODE_PORT` TCP 可连接，不应使用 HTTP 状态码或 TLS 握手作为启动 frpc 的条件；如平台行为特殊，可用 `FRP_WAIT_FOR_NODE=false` 跳过
 - `XTLS_API_PORT` 是内部端口，不应通过 Docker、frp、VPS 防火墙或 PaaS 入站公开
 - VPS 侧 frps 只需一次性配置 `bindPort`、`auth.token` 和 `allowPorts` 端口池；新增节点时只需分配新的 `FRP_REMOTE_PORT`，`FRP_PROXY_NAME` 可手动指定或由容器自动生成，不要为每个节点修改 frps 服务端配置

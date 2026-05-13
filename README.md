@@ -67,14 +67,16 @@ services:
 
 如果想使用非官方的 Go 实现，可以改用 `latest-go-paas-frp`。Go 实现来自 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go)，版本跟随 `rw-node-go` 自己的 release，不跟随 `remnawave/node` 的上游版本号。
 
-PaaS 镜像默认还会启动 HAProxy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound：
+PaaS 镜像默认还会启动 HAProxy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound。Go 实现镜像还支持把 `/node/*` 和 `/vision/*` 转发到本机主 API，但默认的 Remnawave Panel 节点地址仍应使用下面的 VPS raw TCP 入口。
 
 ```text
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /xh-* -> 127.0.0.1:8080
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /ws-* -> 127.0.0.1:8880
+PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /node/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
+PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /vision/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
 ```
 
-这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。
+这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。`/node/*` 和 `/vision/*` 会转发到本机 `NODE_PORT` 的 HTTPS 服务，并跳过 upstream 证书校验，以兼容节点自签证书；这条 HTTP 前置 API 路径是给明确需要可信前置代理的场景使用，不替代默认的 FRP raw TCP Panel 链路。
 
 连接链路：
 
@@ -179,6 +181,7 @@ ghcr.io/x-dora/rw-node:latest-go-paas-frp
 | 变量名 | 默认值 | 描述 |
 |--------|--------|------|
 | `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
+| `NODE_TLS_CLIENT_AUTH` | `mtls` | Go 实现镜像主 API 的 TLS 客户端证书策略，可选 `mtls`、`optional`、`none`；`none` 只适用于可信前置已完成客户端证书校验且源站访问受限的场景 |
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
 | `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
 | `FRP_SERVER_PORT` | `7000` | frps 控制端口 |
@@ -252,6 +255,8 @@ vps.example.com:22001
 
 如果使用 HAProxy HTTP 前置承载 xhttp/ws 流量，则客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。xhttp inbound 固定监听本机 `8080` 明文 HTTP，ws inbound 固定监听本机 `8880` 明文 HTTP。`/xh`、`/xh/abc`、`/ws`、`/ws/abc` 不会匹配前置规则，只有以 `/xh-` 或 `/ws-` 开头的路径会被转发。
 
+Go 实现镜像的 HTTP 前置还会匹配 `/node/` 和 `/vision/`，并转发到本机 `NODE_PORT` 的 HTTPS API，HAProxy 不校验 upstream 的自签证书。这不是默认推荐的 Remnawave Panel 节点地址；普通 PaaS FRP 部署仍应让 Panel 访问 `<VPS_IP_OR_DOMAIN>:<FRP_REMOTE_PORT>`，保持 raw TCP 转发链路。
+
 如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
 PaaS FRP 入口脚本会先启动 HAProxy HTTP 前置，再启动 rw-node，然后在启动 frpc 前等待 `NODE_PORT` 接受 TCP 连接；frpc readiness 不会请求 HTTP 路径，也不会要求 TLS 握手成功。如果平台或上游行为导致探测仍不适用，可以设置 `FRP_WAIT_FOR_NODE=false` 直接启动 frpc。
@@ -298,7 +303,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
   --impl go \
   --secret-key YOUR_SECRET_KEY \
-  --port 2222
+  --port 2222 \
+  --node-tls-client-auth mtls
 
 # 固定 rw-node-go 版本
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
@@ -355,6 +361,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 |--------|------|--------|
 | `NODE_PORT` | 节点端口 | `2222` |
 | `SECRET_KEY` | 面板密钥 | - |
+| `NODE_TLS_CLIENT_AUTH` | Go 模式主 API 的 TLS 客户端证书策略，可选 `mtls`、`optional`、`none` | `mtls` |
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
 | `INTERNAL_REST_PORT` | Go 模式本机 Internal REST 端口，不要公开 | `61001` |
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
