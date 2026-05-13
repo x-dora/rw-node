@@ -20,8 +20,8 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 |------|------|------|
 | `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | **~380MB** |
 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
-| `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS 反向 TCP 隧道版 (内置 frpc + HAProxy HTTP 前置) | ~400MB |
-| `ghcr.io/x-dora/rw-node:latest-go-paas-frp` | 非官方 Go 实现 PaaS 反向 TCP 隧道版 (内置 frpc + HAProxy HTTP 前置) | 更小 |
+| `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS HTTPS 直连版 (历史标签名，内置 HAProxy HTTP 前置；frpc 后续会删除) | ~400MB |
+| `ghcr.io/x-dora/rw-node:latest-go-paas-frp` | 非官方 Go 实现 PaaS HTTPS 直连版 (历史标签名；frpc 后续会删除) | 更小 |
 
 ```bash
 # 轻量版（推荐）
@@ -61,13 +61,30 @@ services:
       - "2222:2222"
 ```
 
-### 方式一补充：PaaS + FRP 反向 TCP 隧道
+### 方式一补充：PaaS HTTPS 直连（推荐）
 
-当 PaaS 只提供 HTTP/HTTPS 入站端口，无法直接公开 `NODE_PORT` 的原始 TCP 连接时，可以使用 `latest-paas-frp` 镜像。该镜像会让容器主动连接到你的 VPS 上的 `frps`，由 VPS 对外提供节点 TCP 入口。
+现在 PaaS 场景最推荐的接入方式是直接使用 PaaS 分配的 HTTPS 域名，不再通过 `frpc -> frps` 反向 TCP 隧道。核心思路是让 Remnawave Panel 信任 PaaS HTTPS 域名所用证书链的公共 Root CA，然后让节点主 API 不再要求客户端证书。
+
+推荐链路：
+
+```text
+Remnawave Panel -> https://<paas-domain> -> PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /node/* -> 127.0.0.1:NODE_PORT
+```
+
+需要做两处配置：
+
+1. 在 Panel 端数据库中找到 `keygen` 记录，把 PaaS HTTPS 域名证书链对应的一些公共证书 Root CA 追加到 `ca_cert` 字段。
+2. 在 PaaS 节点环境变量中设置 `NODE_TLS_CLIENT_AUTH=none`，然后在 Remnawave Panel 的节点地址里填写 PaaS 提供的 HTTPS 域名。
+
+这样 Panel 可以通过正常的公共 CA 链校验 PaaS HTTPS 域名，节点侧也不会再因为 PaaS/HAProxy 前置无法透传客户端证书而拒绝连接。`frpc`、VPS `frps`、`FRP_REMOTE_PORT` 都不再是推荐部署所需组件。
+
+仓库提供了一个常见免费/托管平台 Root CA 参考包：`config/certs/free-provider-root-ca-bundle.pem`。它包含 Let's Encrypt、Google Trust Services、Sectigo/USERTrust 的 8 张 Root CA，适合作为追加到 `keygen.ca_cert` 的起点；具体列表见 `config/certs/README.md`。如果 PaaS 使用自定义域名证书、私有 CA、企业代理证书或特殊区域证书链，需要额外追加实际链路对应的 Root CA。
+
+当前 PaaS 镜像仍然沿用 `latest-paas-frp` / `latest-go-paas-frp` 这两个历史标签名，并且镜像内暂时还包含 frpc。后续版本会删除 frpc 相关能力，新的部署不建议再依赖 FRP 链路。
 
 如果想使用非官方的 Go 实现，可以改用 `latest-go-paas-frp`。Go 实现来自 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go)，版本跟随 `rw-node-go` 自己的 release，不跟随 `remnawave/node` 的上游版本号。
 
-PaaS 镜像默认还会启动 HAProxy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound。Go 实现镜像还支持把 `/node/*` 和 `/vision/*` 转发到本机主 API，但默认的 Remnawave Panel 节点地址仍应使用下面的 VPS raw TCP 入口。
+PaaS 镜像默认会启动 HAProxy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径前缀分流到本机 Xray inbound，并把 Panel 主 API 路径转发到本机 `NODE_PORT`。
 
 ```text
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /xh-* -> 127.0.0.1:8080
@@ -76,82 +93,7 @@ PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /node/* -> 127.0.0.1:NODE_PORT (HTTPS, 
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /vision/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
 ```
 
-这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。`/node/*` 和 `/vision/*` 会转发到本机 `NODE_PORT` 的 HTTPS 服务，并跳过 upstream 证书校验，以兼容节点自签证书；这条 HTTP 前置 API 路径是给明确需要可信前置代理的场景使用，不替代默认的 FRP raw TCP Panel 链路。
-
-连接链路：
-
-```text
-Remnawave Panel -> VPS:FRP_REMOTE_PORT -> frps -> PaaS frpc -> 127.0.0.1:NODE_PORT -> rw-node HTTPS
-```
-
-这条链路只做 TCP 转发，不做 HTTPS 反代或 TLS 终止，因此控制台仍会看到 rw-node 自己的自签证书。
-
-`frpc -> frps` 的控制/数据连接默认使用 TCP `7000`。如果 PaaS 出站网络只适合 HTTPS，或希望这段回连经过支持 WebSocket 的 CDN，可以把 PaaS 侧 `FRP_TRANSPORT_PROTOCOL` 改为 `websocket` 或 `wss`，通常配合 `FRP_SERVER_PORT=443`。这只改变容器回连 frps 的方式，不改变 Remnawave Panel 访问 `FRP_REMOTE_PORT` 的 raw TCP 节点入口。
-
-#### VPS 侧一次性配置 frps
-
-推荐直接使用仓库中的安装脚本：
-
-```bash
-sudo bash scripts/install-frps.sh \
-  --token REPLACE_WITH_STRONG_RANDOM_TOKEN \
-  --bind-port 7000 \
-  --allow-port-start 22000 \
-  --allow-port-end 22999
-```
-
-也可以手动下载 frp 并安装 `frps`，然后创建 `/etc/frp/frps.toml`：
-
-```toml
-bindPort = 7000
-auth.token = "REPLACE_WITH_STRONG_RANDOM_TOKEN"
-
-allowPorts = [
-  { start = 22000, end = 22999 }
-]
-```
-
-仓库也提供了示例文件：`config/frp/frps.toml.example` 和 `config/systemd/frps.service`。
-
-如果要让 `frpc -> frps` 走 WSS/CDN，可以让 frps 直接监听 `443`，或用 Nginx/Caddy 在 `443` 终止 HTTPS 后反代到本机 frps 控制端口。frp 的 WebSocket 请求路径固定为 `/~!frp`，Nginx 示例：
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name frps.example.com;
-
-    ssl_certificate /etc/letsencrypt/live/frps.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/frps.example.com/privkey.pem;
-
-    location /~!frp {
-        proxy_pass http://127.0.0.1:7000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-}
-```
-
-启动服务：
-
-```bash
-sudo mkdir -p /etc/frp
-sudo cp config/frp/frps.toml.example /etc/frp/frps.toml
-sudo cp config/systemd/frps.service /etc/systemd/system/frps.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now frps
-```
-
-防火墙需要放行：
-
-- `7000/tcp`：PaaS 容器连接 `frps` 的控制端口
-- `443/tcp`：可选，`frpc -> frps` 使用 `wss` 并经 HTTPS/CDN 回连时使用
-- `22000-22999/tcp`：节点公网入口端口池
-
-新增 PaaS 节点时不需要再修改 VPS 的 `frps.toml`，只需要从端口池中分配一个未使用端口。
+这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。`/node/*` 和 `/vision/*` 会转发到本机 `NODE_PORT` 的 HTTPS 服务，并跳过 upstream 证书校验，以兼容节点自签证书。
 
 #### PaaS 侧环境变量
 
@@ -172,26 +114,16 @@ ghcr.io/x-dora/rw-node:latest-go-paas-frp
 | 变量名 | 描述 | 示例 |
 |--------|------|------|
 | `SECRET_KEY` | Remnawave Panel 中的节点密钥 | `YOUR_SECRET_KEY` |
-| `FRP_SERVER_ADDR` | VPS IP 或域名 | `vps.example.com` |
-| `FRP_TOKEN` | 与 `frps.toml` 一致的 token | `REPLACE_WITH_STRONG_RANDOM_TOKEN` |
-| `FRP_REMOTE_PORT` | 该节点在 VPS 上占用的公网端口 | `22001` |
 
 常用可选环境变量：
 
 | 变量名 | 默认值 | 描述 |
 |--------|--------|------|
 | `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
-| `NODE_TLS_CLIENT_AUTH` | `mtls` | Go 实现镜像主 API 的 TLS 客户端证书策略，可选 `mtls`、`optional`、`none`；`none` 只适用于可信前置已完成客户端证书校验且源站访问受限的场景 |
+| `NODE_TLS_CLIENT_AUTH` | `mtls` | PaaS HTTPS 直连推荐设置为 `none`，避免 PaaS/HAProxy 前置无法透传客户端证书导致 Panel 连接失败 |
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
 | `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
-| `FRP_SERVER_PORT` | `7000` | frps 控制端口 |
-| `FRP_TRANSPORT_PROTOCOL` | `tcp` | frpc 连接 frps 的传输协议，可选 `tcp`、`websocket`、`wss` |
-| `FRP_TLS_SERVER_NAME` | `FRP_SERVER_ADDR` | 可选，覆盖 WSS/TLS 连接校验使用的 SNI/ServerName；`wss` 模式不填时自动使用 `FRP_SERVER_ADDR` |
-| `FRP_TLS_TRUSTED_CA_FILE` | - | 可选，挂载自定义 CA 后用于校验 frps 源站证书 |
-| `FRP_PROXY_NAME` | `rw-node-<随机字符>` | frp 代理唯一名称 |
-| `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
-| `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
-| `FRP_WAIT_FOR_NODE` | `true` | 启动 frpc 前是否等待 `NODE_PORT` TCP 可连接 |
+| `FRP_ENABLED` | `true` | 推荐设置为 `false` 禁用 frpc；frpc 将在后续版本删除 |
 | `PORT` | - | PaaS 下发的 HTTP 回源端口；HAProxy 优先监听该端口 |
 | `HTTP_FRONT_ENABLED` | `true` | 是否启动 HAProxy HTTP 前置；设为 `false` 时回退为旧的简单 health server |
 | `HTTP_FRONT_PORT` | `${PORT:-3000}` | HAProxy HTTP 前置监听端口，通常不需要手动设置 |
@@ -206,27 +138,9 @@ docker run -d \
   --name rw-node-paas \
   -e SECRET_KEY=YOUR_SECRET_KEY \
   -e NODE_PORT=2222 \
+  -e NODE_TLS_CLIENT_AUTH=none \
   -e XTLS_API_PORT=61000 \
-  -e FRP_SERVER_ADDR=vps.example.com \
-  -e FRP_SERVER_PORT=7000 \
-  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
-  -e FRP_REMOTE_PORT=22001 \
-  ghcr.io/x-dora/rw-node:latest-paas-frp
-```
-
-WSS/CDN 回连示例：
-
-```bash
-docker run -d \
-  --name rw-node-paas \
-  -e SECRET_KEY=YOUR_SECRET_KEY \
-  -e NODE_PORT=2222 \
-  -e XTLS_API_PORT=61000 \
-  -e FRP_SERVER_ADDR=frps.example.com \
-  -e FRP_SERVER_PORT=443 \
-  -e FRP_TRANSPORT_PROTOCOL=wss \
-  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
-  -e FRP_REMOTE_PORT=22001 \
+  -e FRP_ENABLED=false \
   ghcr.io/x-dora/rw-node:latest-paas-frp
 ```
 
@@ -237,39 +151,35 @@ docker run -d \
   --name rw-node-go-paas \
   -e SECRET_KEY=YOUR_SECRET_KEY \
   -e NODE_PORT=2222 \
+  -e NODE_TLS_CLIENT_AUTH=none \
   -e INTERNAL_REST_PORT=61001 \
-  -e FRP_SERVER_ADDR=vps.example.com \
-  -e FRP_SERVER_PORT=7000 \
-  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
-  -e FRP_REMOTE_PORT=22001 \
+  -e FRP_ENABLED=false \
   ghcr.io/x-dora/rw-node:latest-go-paas-frp
 ```
 
-Remnawave Panel 中节点地址填写 VPS 地址和 `FRP_REMOTE_PORT`，例如：
+Remnawave Panel 中节点地址填写 PaaS 提供的 HTTPS 域名，例如：
 
 ```text
-vps.example.com:22001
+https://rw-node.example-paas.app
 ```
 
-不要填写 PaaS 分配的 HTTP/HTTPS 域名，也不要经过 CDN/HTTPS 反向代理。
+Panel 数据库 `keygen.ca_cert` 字段需要包含该 HTTPS 域名证书链对应的公共 Root CA，否则 Panel 仍可能因为不信任 PaaS 证书链而拒绝连接。可以参考 `config/certs/free-provider-root-ca-bundle.pem`，但最终以实际 PaaS 域名的证书链为准。
 
 如果使用 HAProxy HTTP 前置承载 xhttp/ws 流量，则客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。xhttp inbound 固定监听本机 `8080` 明文 HTTP，ws inbound 固定监听本机 `8880` 明文 HTTP。`/xh`、`/xh/abc`、`/ws`、`/ws/abc` 不会匹配前置规则，只有以 `/xh-` 或 `/ws-` 开头的路径会被转发。
 
-Go 实现镜像的 HTTP 前置还会匹配 `/node/` 和 `/vision/`，并转发到本机 `NODE_PORT` 的 HTTPS API，HAProxy 不校验 upstream 的自签证书。这不是默认推荐的 Remnawave Panel 节点地址；普通 PaaS FRP 部署仍应让 Panel 访问 `<VPS_IP_OR_DOMAIN>:<FRP_REMOTE_PORT>`，保持 raw TCP 转发链路。
-
 如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
-PaaS FRP 入口脚本会先启动 HAProxy HTTP 前置，再启动 rw-node，然后在启动 frpc 前等待 `NODE_PORT` 接受 TCP 连接；frpc readiness 不会请求 HTTP 路径，也不会要求 TLS 握手成功。如果平台或上游行为导致探测仍不适用，可以设置 `FRP_WAIT_FOR_NODE=false` 直接启动 frpc。
+#### FRP 旧方案
 
-#### 新增节点流程
+FRP 反向 TCP 隧道是旧方案，仅建议已有部署临时保留。后续版本会删除 frpc，因此不建议新部署继续配置 `FRP_SERVER_ADDR`、`FRP_TOKEN`、`FRP_REMOTE_PORT`、VPS `frps` 或端口池。
 
-1. 在 PaaS 新建一个 `latest-paas-frp` 实例。
-2. 从 `22000-22999` 中挑一个未使用端口，例如 `22002`，设置为 `FRP_REMOTE_PORT`。
-3. 设置该节点对应的 `SECRET_KEY`。
-4. 可选：设置易读的 `FRP_PROXY_NAME`，例如 `rw-node-02`；不设置时容器会自动生成 `rw-node-<随机字符>`。
-5. 在 Remnawave Panel 中填写 `<VPS_IP_OR_DOMAIN>:<FRP_REMOTE_PORT>`。
+旧 FRP 链路如下：
 
-建议维护一个简单端口表，例如 `22001 = rw-node-hk-01`、`22002 = rw-node-us-01`，避免多个节点使用同一个端口。
+```text
+Remnawave Panel -> VPS:FRP_REMOTE_PORT -> frps -> PaaS frpc -> 127.0.0.1:NODE_PORT -> rw-node HTTPS
+```
+
+如果仍需临时使用旧方案，需要自行维护 VPS 侧 `frps`、`allowPorts` 端口池和 PaaS 侧 FRP 环境变量。迁移到 HTTPS 直连后，应设置 `FRP_ENABLED=false` 并移除 VPS 侧对应端口开放。
 
 ### 方式二：一键脚本安装
 
@@ -361,19 +271,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 |--------|------|--------|
 | `NODE_PORT` | 节点端口 | `2222` |
 | `SECRET_KEY` | 面板密钥 | - |
-| `NODE_TLS_CLIENT_AUTH` | Go 模式主 API 的 TLS 客户端证书策略，可选 `mtls`、`optional`、`none` | `mtls` |
+| `NODE_TLS_CLIENT_AUTH` | Go 模式主 API 的 TLS 客户端证书策略；PaaS HTTPS 直连推荐设为 `none` | `mtls` |
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
 | `INTERNAL_REST_PORT` | Go 模式本机 Internal REST 端口，不要公开 | `61001` |
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
-| `FRP_SERVER_ADDR` | PaaS FRP 版使用的 frps 地址 | - |
-| `FRP_SERVER_PORT` | PaaS FRP 版使用的 frps 端口 | `7000` |
-| `FRP_TRANSPORT_PROTOCOL` | PaaS FRP 版 frpc 连接 frps 的传输协议，可选 `tcp`、`websocket`、`wss` | `tcp` |
-| `FRP_TLS_SERVER_NAME` | PaaS FRP 版 WSS/TLS 连接使用的 SNI/ServerName，`wss` 模式不填时自动使用 `FRP_SERVER_ADDR` | `FRP_SERVER_ADDR` |
-| `FRP_TLS_TRUSTED_CA_FILE` | PaaS FRP 版 WSS/TLS 连接使用的自定义 CA 文件路径 | - |
-| `FRP_TOKEN` | PaaS FRP 版使用的 frps token | - |
-| `FRP_PROXY_NAME` | PaaS FRP 版代理名称，不填则自动生成 | `rw-node-<随机字符>` |
-| `FRP_PROXY_NAME_PREFIX` | PaaS FRP 版自动代理名前缀 | `rw-node` |
-| `FRP_REMOTE_PORT` | PaaS FRP 版 VPS 公网节点端口 | - |
+| `FRP_ENABLED` | 是否启动旧 FRP frpc；PaaS HTTPS 直连推荐设为 `false`，后续会删除 frpc | `true` |
+| `FRP_SERVER_ADDR` | 旧 FRP 方案使用的 frps 地址，新部署不推荐配置 | - |
+| `FRP_SERVER_PORT` | 旧 FRP 方案使用的 frps 端口 | `7000` |
+| `FRP_TRANSPORT_PROTOCOL` | 旧 FRP 方案中 frpc 连接 frps 的传输协议，可选 `tcp`、`websocket`、`wss` | `tcp` |
+| `FRP_TLS_SERVER_NAME` | 旧 FRP 方案 WSS/TLS 连接使用的 SNI/ServerName，`wss` 模式不填时自动使用 `FRP_SERVER_ADDR` | `FRP_SERVER_ADDR` |
+| `FRP_TLS_TRUSTED_CA_FILE` | 旧 FRP 方案 WSS/TLS 连接使用的自定义 CA 文件路径 | - |
+| `FRP_TOKEN` | 旧 FRP 方案使用的 frps token | - |
+| `FRP_PROXY_NAME` | 旧 FRP 方案代理名称，不填则自动生成 | `rw-node-<随机字符>` |
+| `FRP_PROXY_NAME_PREFIX` | 旧 FRP 方案自动代理名前缀 | `rw-node` |
+| `FRP_REMOTE_PORT` | 旧 FRP 方案 VPS 公网节点端口 | - |
 
 ### 自定义工作目录
 
