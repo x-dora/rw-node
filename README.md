@@ -1,6 +1,26 @@
 # RW-Node 轻量化部署
 
-Remnawave Node 轻量化部署方案，**无需 Python**。
+RW-Node 是 [remnawave/node](https://github.com/remnawave/node) 的轻量化部署与打包方案，目标是在不改动上游业务逻辑的前提下，降低节点部署体积和运行依赖，并提供适合 VPS、容器和 PaaS 平台的开箱即用镜像与脚本。
+
+本仓库**不维护 Remnawave Node 的应用源码**。应用源码来自上游 `remnawave/node`，本项目通过 GitHub Actions 按 `.upstream-version` 指定的上游版本自动拉取、构建、裁剪生产依赖并发布安装包和 Docker 镜像。因此，本项目更接近“构建/分发/部署层”，不是 Remnawave Node 的功能分叉。
+
+项目提供四类交付物：
+
+- 轻量 Docker 镜像：使用 Go 版 Supervisord，去掉 Python 运行时，适合常规 Docker 部署。
+- 官方兼容 Docker 镜像：保留 Python Supervisord，尽量贴近官方镜像行为。
+- PaaS HTTPS 直连镜像：内置 HAProxy HTTP 前置，支持在只提供 HTTP/HTTPS 回源端口的平台上按路径分流 `/node/*`、`/vision/*`、`/xh-*`、`/ws-*`。
+- 一键脚本安装：适合没有 Docker 的 VPS/容器环境，自动安装 Node.js、Xray-core、Supervisord、systemd 服务或前台运行辅助脚本。
+
+除官方 JS 兼容实现外，安装脚本和 PaaS 镜像还支持非官方 Go 实现 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go)。Go 实现用于更小体积和更少运行时依赖，但版本号、行为和上游 `remnawave/node` 不完全绑定；需要严格兼容官方 Node 行为时，应优先使用 JS 兼容实现。
+
+典型使用场景：
+
+- 在 VPS 上用一键脚本部署 Remnawave Node，并由 systemd 管理服务。
+- 在 Docker / Compose 中运行轻量版或官方兼容版镜像。
+- 在 Render、Koyeb、Railway、Fly.io 等 PaaS 场景中，通过平台 HTTPS 域名直连 Panel 和节点。
+- 在只有单个公网 HTTP/HTTPS 端口的环境中，用 HAProxy 前置把 API、xhttp、WebSocket 流量按路径分流到本机不同端口。
+
+需要注意的是，本项目不会替代 Remnawave Panel，也不会修改 Panel 的证书校验逻辑。PaaS HTTPS 直连场景下，仍需要在 Panel 端信任 PaaS 域名证书链对应的 Root CA，并按实际网络链路配置 `NODE_TLS_CLIENT_AUTH`、节点地址和 inbound 路径。
 
 ## 功能特性
 
@@ -22,6 +42,13 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
 | `ghcr.io/x-dora/rw-node:latest-paas` | PaaS HTTPS 直连版 (内置 HAProxy HTTP 前置) | ~400MB |
 | `ghcr.io/x-dora/rw-node:latest-go-paas` | 非官方 Go 实现 PaaS HTTPS 直连版 | 更小 |
+
+除 `latest*` 标签外，Release workflow 也会发布固定版本标签：
+
+- `ghcr.io/x-dora/rw-node:<version>`：轻量版，例如 `2.7.0`
+- `ghcr.io/x-dora/rw-node:<version>-official`：官方兼容版
+- `ghcr.io/x-dora/rw-node:<version>-paas`：PaaS HTTPS 直连版
+- `ghcr.io/x-dora/rw-node:<rw-node-go-version>-go-paas`：Go 实现 PaaS 版，例如 `v1.0.3-go-paas`
 
 ```bash
 # 轻量版（推荐）
@@ -89,9 +116,12 @@ PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /xh-* -> 127.0.0.1:8080
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /ws-* -> 127.0.0.1:8880
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /node/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
 PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /vision/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
+PaaS HTTP(S) -> HAProxy:${PORT:-3000} -> /health -> 200 ok
 ```
 
 这里的 `/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。HAProxy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。`/node/*` 和 `/vision/*` 会转发到本机 `NODE_PORT` 的 HTTPS 服务，并跳过 upstream 证书校验，以兼容节点自签证书。
+
+除 `/health`、`/xh-*`、`/ws-*`、`/node/*`、`/vision/*` 之外的路径会直接返回 404。`HTTP_FRONT_ENABLED=false` 时不会启动 HAProxy 分流，只会在 PaaS 下发了 `PORT` 且该端口不等于 `NODE_PORT` 时启动一个简单 HTTP health server；这种模式不能承载 `/xh-*`、`/ws-*` 或 Panel API 转发。
 
 #### PaaS 侧环境变量
 
@@ -184,6 +214,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 # 安装时启用 Cloudflare Tunnel
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) --with-cloudflared
 
+# 安装 Cloudflare Tunnel 并写入 token
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
+  --with-cloudflared \
+  --cloudflared-token YOUR_TUNNEL_TOKEN
+
 # 指定版本
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/2.5.2/scripts/install.sh) --version 2.5.2
 
@@ -191,6 +226,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/2.5.2/scripts
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
   --secret-key YOUR_SECRET_KEY \
   --port 2222
+
+# 指定 Xray-core 版本
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
+  --secret-key YOUR_SECRET_KEY \
+  --xray-version v26.3.27
 
 # 非官方 Go 实现最简安装（无 Node.js / Supervisord / 外部 Xray）
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
@@ -208,6 +248,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 ```
 
 `--impl go` 使用 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) 的 release 包，是非官方 Go 实现；它的 `--go-version` 跟随 `rw-node-go` 的 `v1.x` 项目版本，不是 `remnawave/node` 的 `2.x` 版本。默认不传 `--impl` 时仍安装官方 JS 兼容实现。
+
+#### 安装参数
+
+| 参数 | 描述 | 默认值 |
+|------|------|--------|
+| `--impl <official|go>` | 安装实现；`official` 为 JS 兼容实现，`go` 为非官方 Go 实现 | `official` |
+| `--version, -v <版本>` | 指定 JS 兼容实现版本；对应 `remnawave/node` / 本仓库 release 版本 | 最新 release |
+| `--go-version <版本>` | 指定 `rw-node-go` release 版本，仅 `--impl go` 有效 | 最新 `rw-node-go` release |
+| `--port, -p <端口>` | 节点主 API 监听端口 | `2222` |
+| `--secret-key, -k <密钥>` | Remnawave Panel 中的节点密钥；非交互安装时必填 | - |
+| `--xtls-api-port <端口>` | JS 兼容实现的 Xray API 内部端口 | `61000` |
+| `--internal-rest-port <端口>` | Go 实现的 Internal REST 本机端口 | `61001` |
+| `--node-tls-client-auth <mtls|optional|none>` | Go 实现主 API 的 TLS 客户端证书策略；PaaS HTTPS 直连常用 `none` | `mtls` |
+| `--xray-version <版本>` | 指定 JS 兼容实现安装的 Xray-core 版本 | `v26.3.27` |
+| `--with-cloudflared` | 安装 Cloudflare Tunnel 二进制；有 systemd 且 token 有效时启用服务 | 关闭 |
+| `--cloudflared-token <令牌>` | 写入 Cloudflare Tunnel token，并自动启用 `--with-cloudflared` | - |
 
 #### 管理命令
 
@@ -244,9 +300,20 @@ xerrors
 # 更新
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/update.sh)
 
+# 指定版本更新
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/update.sh) --version 2.7.0
+
+# 非交互确认更新
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/update.sh) --yes
+
+# 当前版本相同也重新部署
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/update.sh) --force --yes
+
 # 卸载
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/uninstall.sh)
 ```
+
+`update.sh` 仅支持 JS 兼容实现的在线更新，并会保留已有 `.env` 配置。Go 实现模式暂不走 `update.sh`，需要重新运行 `install.sh --impl go` 覆盖安装；覆盖安装会重新生成 `.env`，请提前备份自定义配置。`uninstall.sh` 会删除安装目录、systemd 服务和本项目创建的 `/usr/local/bin` 符号链接，必须在交互终端中确认后才会执行。
 
 ## 环境变量
 
@@ -258,6 +325,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
 | `INTERNAL_REST_PORT` | Go 模式本机 Internal REST 端口，不要公开 | `61001` |
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
+| `XRAY_LOCATION_ASSET` | Xray 资源文件目录；Go 模式和脚本安装会显式使用，手动迁移资源文件时可指定 | 脚本安装为 `${RW_NODE_DIR}/share/xray`；Go PaaS 镜像为 `/usr/local/share/xray` |
+| `REQUIRE_SECRET_KEY` | Go 模式是否要求 `SECRET_KEY` | `true` |
+| `SUPERVISORD_USER` | JS 兼容实现 Supervisord unix socket 用户名；通常自动随机生成 | 随机 |
+| `SUPERVISORD_PASSWORD` | JS 兼容实现 Supervisord unix socket 密码；通常自动随机生成 | 随机 |
+| `INTERNAL_REST_TOKEN` | JS 兼容实现内部 REST token；通常自动随机生成 | 随机 |
+
+PaaS 镜像还支持 `PORT`、`HTTP_FRONT_ENABLED`、`HTTP_FRONT_PORT`、`XHTTP_UPSTREAM_PORT`、`WS_UPSTREAM_PORT`、`RW_NODE_APP_DIR` 等变量，详见上面的 “PaaS 侧环境变量”。标准 Docker 镜像通常只需要 `NODE_PORT`、`SECRET_KEY`、`XTLS_API_PORT`。
 
 ### 自定义工作目录
 
