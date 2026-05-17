@@ -150,7 +150,7 @@ ARGO_TOKEN=
 `ARGO_TOKEN` 非空时，启动入口会自动启动 `cloudflared`：
 
 ```bash
-cloudflared tunnel --no-autoupdate --protocol http2 --edge-ip-version auto --edge 198.41.192.167:7844 ... --tag "rw_node_port=$HTTP_FRONT_PORT" run --dns-resolver-addrs 1.1.1.1:53 --dns-resolver-addrs 1.0.0.1:53 --token "$ARGO_TOKEN"
+cloudflared tunnel --no-autoupdate --protocol http2 --edge-ip-version auto --tag "rw_node_port=$HTTP_FRONT_PORT" run --dns-resolver-addrs 1.1.1.1:53 --dns-resolver-addrs 1.0.0.1:53 --token "$ARGO_TOKEN"
 ```
 
 ## Cloudflare Tunnel
@@ -173,7 +173,7 @@ http://localhost:${HTTP_FRONT_PORT}
 
 这个 tag 用于让 Cloudflare 连接器侧看到当前节点期望穿透的端口元信息；它不替代 Cloudflare 侧的 Public hostname 路由配置。仅凭 `ARGO_TOKEN` 本身，启动器无法动态修改 Cloudflare 侧 hostname 到本地端口的映射。
 
-启动器会让 `cloudflared` 默认通过 `1.1.1.1:53` 和 `1.0.0.1:53` 解析 Cloudflare Tunnel 的 SRV 记录，并使用 `--edge-ip-version auto` 自动选择 Cloudflare edge IP 版本。因为部分 `cloudflared` edge discovery 路径仍会使用系统 resolver，启动器还会通过 `--edge` 传入 Cloudflare 官方 IPv4 edge 地址，绕过 `_v2-origintunneld._tcp.argotunnel.com` 的 SRV 查询。如果运行环境禁止访问 Cloudflare Tunnel edge 端口，`cloudflared` 仍可能退出。启动器会记录 `cloudflared exited; continuing without Cloudflare Tunnel`，并保持 Caddy 与 `rw-node-go` 继续运行。
+启动器会让 `cloudflared` 默认通过 `1.1.1.1:53` 和 `1.0.0.1:53` 解析 Cloudflare Tunnel 的 SRV 记录，并使用 `--edge-ip-version auto` 自动选择 Cloudflare edge IP 版本。如果默认启动失败，启动器会自动重试一次固定 edge 地址模式，通过 `--edge` 传入 Cloudflare 官方 IPv4 edge 地址，绕过 `_v2-origintunneld._tcp.argotunnel.com` 的 SRV 查询。如果运行环境禁止访问 Cloudflare Tunnel edge 端口，`cloudflared` 仍可能退出。启动器会记录 `cloudflared fixed-edge startup failed; continuing without Cloudflare Tunnel`，并保持 Caddy 与 `rw-node-go` 继续运行。
 
 端口校验规则：
 
@@ -206,6 +206,6 @@ http://localhost:${HTTP_FRONT_PORT}
 7. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
 8. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
 9. 启动 `rw-node-go`。
-10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver、固定 edge 地址和自动 edge IP 版本连接 Cloudflare。
+10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
 11. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
-12. 当可选的 `cloudflared` 提前退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
+12. 当可选的 `cloudflared` 默认模式提前退出时，自动重试固定 Cloudflare edge 地址模式；固定 edge 地址模式仍退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
