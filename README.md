@@ -1,8 +1,10 @@
 # RW-Node Go PaaS Starter
 
-此分支提供两个用于在 PaaS 环境运行 `rw-node-go` 的最小启动入口，并使用自动生成的 Caddy 作为前置代理。
+此分支提供用于在 PaaS 环境运行 `rw-node-go` 的最小启动入口，并使用自动生成的 Caddy 作为前置代理。
 
-可以任选一个运行时启动：
+安装、配置生成和进程编排逻辑集中在 `start.sh`。`index.js` 与 `app.py` 只作为兼容不同 PaaS/runtime 的包装器：启动 Bash 脚本、继承输出，并使用脚本的退出状态共同退出。
+
+可以任选一个入口启动：
 
 ```bash
 npm start
@@ -12,18 +14,53 @@ npm start
 uv run python app.py
 ```
 
-启动入口只支持 Linux `x64` 和 `arm64`。`index.js` 与 `app.py` 只负责安装依赖二进制、生成配置和编排进程，不在代码里实现代理转发逻辑。启动顺序固定为先启动 Caddy，再启动 `rw-node-go`。
+```bash
+bash start.sh
+```
+
+启动入口只支持 Linux `x64` 和 `arm64`。运行环境需要提供 `bash`、`curl`、`tar`、`chmod` 以及常见 GNU/coreutils 工具。
 
 ## 文件
 
-- `index.js`：Node.js 启动入口，只使用 Node.js 内置模块。
-- `app.py`：Python 启动入口，只使用 Python 标准库。
+- `start.sh`：唯一的安装、配置生成和启动编排入口。
+- `index.js`：Node.js 包装器，只负责启动 `start.sh`。
+- `app.py`：Python 包装器，只负责启动 `start.sh`。
+- `.env.example`：环境变量示例。
 - `package.json`：Node.js 启动元数据。
 - `pyproject.toml`：Python 启动元数据。
 
+## `.env`
+
+启动时会读取仓库根目录的 `.env`。变量优先级固定为：
+
+```text
+外部环境变量 > .env > 脚本默认值
+```
+
+也就是说，如果系统、PaaS、Shell 或容器已经提供了某个环境变量，`.env` 中的同名变量不会覆盖它。
+
+可以复制示例文件后修改：
+
+```bash
+cp .env.example .env
+```
+
+真实 `.env` 已加入 `.gitignore`，不应提交到仓库。
+
+`.env` 支持以下格式：
+
+```text
+KEY=value
+export KEY=value
+KEY="value"
+KEY='value'
+```
+
+支持空行和 `#` 注释。不支持命令替换、变量展开或任意 Bash 代码；格式不合法的行会导致启动失败并输出行号。
+
 ## 安装目录
 
-`rw-node-go` 和 Caddy 都安装到当前工作目录下：
+`rw-node-go` 和 Caddy 都安装到仓库根目录下：
 
 ```text
 .rw-node-go/
@@ -38,11 +75,11 @@ uv run python app.py
   caddy/config/
 ```
 
-当 `rw-node-go` 二进制或必需的 Xray 资源文件缺失时，启动入口会下载 `rw-node-go`。当 `CADDY_BIN` 未设置，并且 `.rw-node-go/bin/caddy` 缺失或不可执行时，启动入口会下载 Caddy。
+当 `rw-node-go` 二进制或必需的 Xray 资源文件缺失时，`start.sh` 会下载 `rw-node-go`。当 `CADDY_BIN` 未设置，并且 `.rw-node-go/bin/caddy` 缺失或不可执行时，`start.sh` 会下载 Caddy。
 
 ## Caddy
 
-启动入口优先使用 `CADDY_BIN` 指定的 Caddy 二进制路径，该路径必须存在。
+启动入口优先使用 `CADDY_BIN` 指定的 Caddy 二进制路径，该路径必须存在且可执行。
 
 如果没有设置 `CADDY_BIN`，启动入口会检查 `.rw-node-go/bin/caddy`。如果本地 Caddy 不存在，则通过 `caddyserver/caddy` 的 GitHub Releases API 获取 release 信息，按当前 Linux 架构选择官方 `tar.gz` 资产，解压出 `caddy`，复制到 `.rw-node-go/bin/caddy`，并设置权限为 `755`。
 
@@ -57,9 +94,9 @@ CADDY_VERSION=v2.11.3
 Caddy 子进程会使用适合 rootless PaaS 的目录：
 
 ```text
-HOME=<当前工作目录>
-XDG_DATA_HOME=<当前工作目录>/.rw-node-go/caddy/data
-XDG_CONFIG_HOME=<当前工作目录>/.rw-node-go/caddy/config
+HOME=<仓库根目录>
+XDG_DATA_HOME=<仓库根目录>/.rw-node-go/caddy/data
+XDG_CONFIG_HOME=<仓库根目录>/.rw-node-go/caddy/config
 ```
 
 生成的 `Caddyfile` 会启用本地 admin 端点：
@@ -77,15 +114,15 @@ http://:${HTTP_FRONT_PORT}
 
 ## 环境变量
 
-启动入口会保留已有环境变量。缺失变量使用以下默认值：
+启动入口会保留已有环境变量。缺失变量使用 `.env`，`.env` 也缺失时使用以下默认值：
 
 ```text
 NODE_PORT=2222
 NODE_TLS_CLIENT_AUTH=none
 INTERNAL_REST_PORT=61001
 REQUIRE_SECRET_KEY=true
-RW_NODE_DIR=<当前工作目录>
-XRAY_LOCATION_ASSET=<当前工作目录>/.rw-node-go/share/xray
+RW_NODE_DIR=<仓库根目录>
+XRAY_LOCATION_ASSET=<仓库根目录>/.rw-node-go/share/xray
 HTTP_FRONT_PORT=${PORT:-3000}
 XHTTP_UPSTREAM_PORT=8080
 WS_UPSTREAM_PORT=8880
@@ -120,13 +157,14 @@ CADDY_VERSION=v2.11.3
 
 ## 进程行为
 
-两个启动入口都会执行以下流程：
+`start.sh` 会执行以下流程：
 
-1. 校验平台、架构和端口。
-2. 确保 Caddy 已安装。
-3. 确保 `rw-node-go` 已安装。
-4. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
-5. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置。
-6. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
-7. 启动 `rw-node-go`。
-8. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy 和 `rw-node-go`。
+1. 读取 `.env`，并按优先级补齐默认环境变量。
+2. 校验平台、架构和端口。
+3. 确保 Caddy 已安装。
+4. 确保 `rw-node-go` 已安装。
+5. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
+6. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置。
+7. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
+8. 启动 `rw-node-go`。
+9. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy 和 `rw-node-go`。
