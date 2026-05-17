@@ -99,10 +99,19 @@ XDG_DATA_HOME=<仓库根目录>/.rw-node-go/caddy/data
 XDG_CONFIG_HOME=<仓库根目录>/.rw-node-go/caddy/config
 ```
 
-生成的 `Caddyfile` 会启用本地 admin 端点：
+生成的 `Caddyfile` 会关闭 Caddy admin 端点和配置持久化，避免在 PaaS 运行时额外打开本地管理端口或写入 autosave 配置：
 
 ```text
-admin localhost:2019
+admin off
+persist_config off
+```
+
+Caddy 全局日志级别设置为 `WARN`，用于减少启动时的普通 info 日志，同时保留警告和错误：
+
+```text
+log {
+  level WARN
+}
 ```
 
 同时会关闭自动 HTTPS，并使用明文 HTTP 监听业务入口：
@@ -110,6 +119,14 @@ admin localhost:2019
 ```text
 auto_https off
 http://:${HTTP_FRONT_PORT}
+```
+
+业务入口只启用 HTTP/1.1，避免明文监听场景下 Caddy 输出 HTTP/2、HTTP/3 需要 TLS 的启动警告：
+
+```text
+servers :${HTTP_FRONT_PORT} {
+  protocols h1
+}
 ```
 
 ## 环境变量
@@ -146,7 +163,7 @@ CADDY_VERSION=v2.11.3
 
 生成的 Caddy 配置对应 PaaS 前置代理行为：
 
-- `/health` 返回 `200`，响应体为 `ok`。
+- `/health` 返回 `200`，响应体为 `ok`，不附带尾随换行。
 - `/xh-*` 转发到 `127.0.0.1:${XHTTP_UPSTREAM_PORT}`。
 - `/ws-*` 转发到 `127.0.0.1:${WS_UPSTREAM_PORT}`。
 - `/node/*` 通过 HTTPS 转发到 `127.0.0.1:${NODE_PORT}`，并跳过证书校验。
@@ -164,7 +181,7 @@ CADDY_VERSION=v2.11.3
 3. 确保 Caddy 已安装。
 4. 确保 `rw-node-go` 已安装。
 5. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
-6. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置。
+6. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
 7. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
 8. 启动 `rw-node-go`。
 9. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy 和 `rw-node-go`。

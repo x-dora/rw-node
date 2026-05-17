@@ -314,42 +314,51 @@ write_caddyfile() {
   mkdir -p "$CONF_DIR"
   cat > "$CADDYFILE" <<EOF
 {
-    admin localhost:2019
-    auto_https off
+	admin off
+	auto_https off
+	persist_config off
+
+	log {
+		level WARN
+	}
+
+	servers :$HTTP_FRONT_PORT {
+		protocols h1
+	}
 }
 
 http://:$HTTP_FRONT_PORT {
-    handle /health {
-        respond "ok\n" 200
-    }
+	handle /health {
+		respond "ok" 200
+	}
 
-    handle /xh-* {
-        reverse_proxy 127.0.0.1:$XHTTP_UPSTREAM_PORT
-    }
+	handle /xh-* {
+		reverse_proxy 127.0.0.1:$XHTTP_UPSTREAM_PORT
+	}
 
-    handle /ws-* {
-        reverse_proxy 127.0.0.1:$WS_UPSTREAM_PORT
-    }
+	handle /ws-* {
+		reverse_proxy 127.0.0.1:$WS_UPSTREAM_PORT
+	}
 
-    handle /node/* {
-        reverse_proxy https://127.0.0.1:$NODE_PORT {
-            transport http {
-                tls_insecure_skip_verify
-            }
-        }
-    }
+	handle /node/* {
+		reverse_proxy https://127.0.0.1:$NODE_PORT {
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+	}
 
-    handle /vision/* {
-        reverse_proxy https://127.0.0.1:$NODE_PORT {
-            transport http {
-                tls_insecure_skip_verify
-            }
-        }
-    }
+	handle /vision/* {
+		reverse_proxy https://127.0.0.1:$NODE_PORT {
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+	}
 
-    handle {
-        respond 404
-    }
+	handle {
+		respond 404
+	}
 }
 EOF
 }
@@ -428,6 +437,7 @@ main() {
   dry_run_if_requested
 
   require_command curl
+  require_command mktemp
   require_command tar
   ensure_linux
   validate_ports
@@ -437,8 +447,16 @@ main() {
   write_caddyfile
   mkdir -p "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
 
-  HOME="$CWD" XDG_DATA_HOME="$CADDY_DATA_DIR" XDG_CONFIG_HOME="$CADDY_CONFIG_DIR" \
-    "$caddy_bin_resolved" validate --config "$CADDYFILE" --adapter caddyfile
+  local validate_output
+  validate_output="$(mktemp)"
+  if ! HOME="$CWD" XDG_DATA_HOME="$CADDY_DATA_DIR" XDG_CONFIG_HOME="$CADDY_CONFIG_DIR" \
+    "$caddy_bin_resolved" validate --config "$CADDYFILE" --adapter caddyfile >"$validate_output" 2>&1; then
+    cat "$validate_output" >&2
+    rm -f "$validate_output"
+    fail "Caddy configuration validation failed"
+  fi
+  rm -f "$validate_output"
+  log "Caddy configuration is valid"
 
   trap handle_signal INT TERM
 
