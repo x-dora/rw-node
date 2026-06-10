@@ -1,6 +1,6 @@
 # Go implementation PaaS HTTPS direct Dockerfile.
 # Downloads rw-node-go release assets and starts the Caddy HTTP front.
-FROM alpine:3.23
+FROM alpine:3.24
 
 ARG RW_NODE_GO_REPO=x-dora/rw-node-go
 ARG RW_NODE_GO_VERSION=latest
