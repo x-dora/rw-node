@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 PREFIX="[bash-starter]"
 REPO="x-dora/rw-node-go"
-CADDY_REPO="caddyserver/caddy"
 CLOUDFLARED_REPO="cloudflare/cloudflared"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +17,6 @@ APP_BIN="$BIN_DIR/rw-node-go"
 CADDY_BIN_DEFAULT="$BIN_DIR/caddy"
 CLOUDFLARED_BIN_DEFAULT="$BIN_DIR/cloudflared"
 VERSION_FILE="$INSTALL_DIR/.rw-node-go-version"
-CADDY_VERSION_FILE="$INSTALL_DIR/.caddy-version"
 CLOUDFLARED_VERSION_FILE="$INSTALL_DIR/.cloudflared-version"
 CADDYFILE="$CONF_DIR/Caddyfile"
 
@@ -135,6 +133,7 @@ set_default_env() {
   [[ -v RW_NODE_DIR ]] || RW_NODE_DIR="$CWD"
   [[ -v XRAY_LOCATION_ASSET ]] || XRAY_LOCATION_ASSET="$ASSET_DIR"
   [[ -v HTTP_FRONT_PORT ]] || HTTP_FRONT_PORT="${PORT:-3000}"
+  CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
   [[ -v XHTTP_UPSTREAM_PORT ]] || XHTTP_UPSTREAM_PORT=8080
   [[ -v WS_UPSTREAM_PORT ]] || WS_UPSTREAM_PORT=8880
   [[ -v ARGO_TOKEN ]] || ARGO_TOKEN=
@@ -156,10 +155,10 @@ detect_asset_name() {
   esac
 }
 
-detect_caddy_asset_regex() {
+detect_caddy_arch() {
   case "$(uname -m)" in
-    x86_64|amd64) printf '%s' '^caddy_.*_linux_amd64\.tar\.gz$' ;;
-    aarch64|arm64) printf '%s' '^caddy_.*_linux_arm64\.tar\.gz$' ;;
+    x86_64|amd64) printf '%s' "amd64" ;;
+    aarch64|arm64) printf '%s' "arm64" ;;
     *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
   esac
 }
@@ -182,7 +181,11 @@ validate_ports() {
     is_port "${!name}" || fail "$name must be a valid TCP port"
   done
 
+  is_port "$CADDY_HTTP_PORT" || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) must be a valid TCP port; adjust HTTP_FRONT_PORT"
   [[ "$HTTP_FRONT_PORT" != "$NODE_PORT" ]] || fail "HTTP_FRONT_PORT must differ from NODE_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$NODE_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with NODE_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$XHTTP_UPSTREAM_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with XHTTP_UPSTREAM_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$WS_UPSTREAM_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with WS_UPSTREAM_PORT"
 }
 
 github_api_get() {
@@ -212,38 +215,12 @@ download_file() {
   [[ -s "$destination" ]] || fail "download created an empty archive: $destination"
 }
 
-resolve_caddy_release_json() {
-  if [[ -n "${CADDY_VERSION:-}" ]]; then
-    github_api_get "https://api.github.com/repos/$CADDY_REPO/releases/tags/$CADDY_VERSION"
-  else
-    github_api_get "https://api.github.com/repos/$CADDY_REPO/releases/latest"
-  fi
-}
-
 resolve_cloudflared_release_json() {
   if [[ -n "${CLOUDFLARED_VERSION:-}" ]]; then
     github_api_get "https://api.github.com/repos/$CLOUDFLARED_REPO/releases/tags/$CLOUDFLARED_VERSION"
   else
     github_api_get "https://api.github.com/repos/$CLOUDFLARED_REPO/releases/latest"
   fi
-}
-
-find_caddy_download_url() {
-  local release_json="$1"
-  local regex
-  local url name
-  regex="$(detect_caddy_asset_regex)"
-
-  while IFS= read -r url; do
-    name="${url##*/}"
-    if [[ "$name" =~ $regex ]]; then
-      printf '%s' "$url"
-      return 0
-    fi
-  done < <(
-    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$release_json" \
-      | sed -E 's/^"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
-  )
 }
 
 find_release_asset_download_url() {
@@ -277,28 +254,14 @@ ensure_caddy() {
     return 0
   fi
 
-  local release_json tag url asset_name tmp_dir archive stage_dir staged_bin
-  release_json="$(resolve_caddy_release_json)"
-  tag="$(extract_json_string "tag_name" <<< "$release_json")"
-  [[ -n "$tag" ]] || fail "unable to resolve Caddy release assets"
-  url="$(find_caddy_download_url "$release_json")"
-  [[ -n "$url" ]] || fail "Caddy $tag does not provide a supported Linux asset for $(uname -m)"
-  asset_name="${url##*/}"
-  tmp_dir="$INSTALL_DIR/tmp"
-  archive="$tmp_dir/$asset_name"
-  stage_dir="$tmp_dir/caddy-stage"
-  staged_bin="$stage_dir/caddy"
+  local arch url
+  arch="$(detect_caddy_arch)"
+  url="https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com/mholt/caddy-l4"
 
-  log "installing Caddy $tag"
-  rm -rf "$tmp_dir"
-  mkdir -p "$stage_dir" "$BIN_DIR"
-  download_file "$url" "$archive"
-  tar -xzf "$archive" -C "$stage_dir"
-  [[ -f "$staged_bin" ]] || fail "Caddy release asset is missing caddy"
-  cp "$staged_bin" "$CADDY_BIN_DEFAULT"
+  log "downloading Caddy with layer4 plugin (linux/$arch)"
+  mkdir -p "$BIN_DIR"
+  download_file "$url" "$CADDY_BIN_DEFAULT"
   chmod 755 "$CADDY_BIN_DEFAULT"
-  printf '%s\n' "$tag" > "$CADDY_VERSION_FILE"
-  rm -rf "$tmp_dir"
   caddy_bin_resolved="$CADDY_BIN_DEFAULT"
 }
 
@@ -455,12 +418,24 @@ write_caddyfile() {
 		level WARN
 	}
 
-	servers :$HTTP_FRONT_PORT {
+	layer4 {
+		:$HTTP_FRONT_PORT {
+			@tls tls
+			route @tls {
+				proxy 127.0.0.1:$NODE_PORT
+			}
+			route {
+				proxy 127.0.0.1:$CADDY_HTTP_PORT
+			}
+		}
+	}
+
+	servers :$CADDY_HTTP_PORT {
 		protocols h1
 	}
 }
 
-http://:$HTTP_FRONT_PORT {
+http://:$CADDY_HTTP_PORT {
 	handle /health {
 		respond "ok" 200
 	}
@@ -552,7 +527,7 @@ inspect_env_if_requested() {
   printf 'XHTTP_UPSTREAM_PORT=%s\n' "$XHTTP_UPSTREAM_PORT"
   printf 'WS_UPSTREAM_PORT=%s\n' "$WS_UPSTREAM_PORT"
   printf 'CADDY_BIN=%s\n' "${CADDY_BIN:-}"
-  printf 'CADDY_VERSION=%s\n' "${CADDY_VERSION:-}"
+  printf 'CADDY_HTTP_PORT=%s\n' "$CADDY_HTTP_PORT"
   printf 'ARGO_TOKEN_SET=%s\n' "$(cloudflare_tunnel_enabled && printf 'true' || printf 'false')"
   printf 'ARGO_LOG_LEVEL=%s\n' "$ARGO_LOG_LEVEL"
   printf 'CLOUDFLARED_BIN=%s\n' "${CLOUDFLARED_BIN:-}"
@@ -602,7 +577,7 @@ main() {
 
   trap handle_signal INT TERM
 
-  log "starting Caddy on port $HTTP_FRONT_PORT"
+  log "starting Caddy (layer4 on port $HTTP_FRONT_PORT, HTTP on internal port $CADDY_HTTP_PORT)"
   HOME="$CWD" XDG_DATA_HOME="$CADDY_DATA_DIR" XDG_CONFIG_HOME="$CADDY_CONFIG_DIR" \
     "$caddy_bin_resolved" run --config "$CADDYFILE" --adapter caddyfile &
   caddy_pid=$!
