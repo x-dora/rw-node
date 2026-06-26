@@ -46,8 +46,11 @@ COPY --from=build /opt/app/node_modules ./node_modules
 COPY --from=build /opt/app/package*.json ./
 
 RUN set -ex; \
-    apk add --no-cache bash caddy curl tar unzip; \
+    apk add --no-cache bash curl tar unzip; \
     mkdir -p /usr/local/share/xray /opt/rw-node/default-www; \
+    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${TARGETARCH}&p=github.com/mholt/caddy-l4" \
+      -o /usr/local/bin/caddy; \
+    chmod 755 /usr/local/bin/caddy; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         SUPERVISORD_ARCH="ARM64"; \
         XRAY_ARCH="arm64-v8a"; \

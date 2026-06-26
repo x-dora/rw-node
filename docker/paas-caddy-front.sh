@@ -339,9 +339,30 @@ write_caddy_config() {
 {
     admin off
     auto_https off
+    persist_config off
+
+    log {
+        level WARN
+    }
+
+    layer4 {
+        :${HTTP_FRONT_PORT} {
+            @tls tls
+            route @tls {
+                proxy 127.0.0.1:${NODE_PORT}
+            }
+            route {
+                proxy 127.0.0.1:${CADDY_HTTP_PORT}
+            }
+        }
+    }
+
+    servers :${CADDY_HTTP_PORT} {
+        protocols h1
+    }
 }
 
-:${HTTP_FRONT_PORT} {
+http://:${CADDY_HTTP_PORT} {
     handle /health {
         respond "ok" 200
     }
@@ -408,6 +429,28 @@ start_caddy_front() {
         exit 1
     fi
 
+    CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+
+    if ! is_port "${CADDY_HTTP_PORT}"; then
+        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) must be a valid TCP port; adjust HTTP_FRONT_PORT"
+        exit 1
+    fi
+
+    if [[ "${CADDY_HTTP_PORT}" == "${NODE_PORT}" ]]; then
+        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with NODE_PORT"
+        exit 1
+    fi
+
+    if [[ "${CADDY_HTTP_PORT}" == "${XHTTP_UPSTREAM_PORT}" ]]; then
+        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with XHTTP_UPSTREAM_PORT"
+        exit 1
+    fi
+
+    if [[ "${CADDY_HTTP_PORT}" == "${WS_UPSTREAM_PORT}" ]]; then
+        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with WS_UPSTREAM_PORT"
+        exit 1
+    fi
+
     if [[ ! -x "${CADDY_BIN}" ]]; then
         echo "${log_prefix} ERROR: caddy binary not found"
         exit 1
@@ -419,7 +462,7 @@ start_caddy_front() {
 
     "${CADDY_BIN}" validate --config "${config_path}" --adapter caddyfile
 
-    echo "${log_prefix} Starting Caddy HTTP front on port ${HTTP_FRONT_PORT}"
+    echo "${log_prefix} Starting Caddy (layer4 on port ${HTTP_FRONT_PORT}, HTTP on internal port ${CADDY_HTTP_PORT})"
     "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
     caddy_pid=$!
 
