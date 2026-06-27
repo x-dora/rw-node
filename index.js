@@ -16,7 +16,7 @@ if (!fs.existsSync(START_SCRIPT)) {
 
 const child = spawn('bash', [START_SCRIPT], {
   cwd: ROOT_DIR,
-  env: process.env,
+  env: { ...process.env, STARTER_RUNTIME: 'node' },
   stdio: 'inherit',
 });
 

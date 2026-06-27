@@ -41,7 +41,7 @@ def main() -> int:
     child_process = subprocess.Popen(
         ["bash", str(START_SCRIPT)],
         cwd=ROOT_DIR,
-        env=os.environ.copy(),
+        env={**os.environ, "STARTER_RUNTIME": "python"},
     )
 
     return_code = child_process.wait()
