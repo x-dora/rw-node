@@ -35,7 +35,7 @@ jobs:
       build_docker: ${{ steps.v.outputs.build_docker }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Resolve version and flags
         id: v
