@@ -179,7 +179,7 @@ main() {
   "$APP_BIN" &
   app_pid=$!
 
-  if [[ "${REALITY_SPLIT_ENABLED:-true}" == "true" ]]; then
+  if [[ "${REALITY_SPLIT_ENABLED:-true}" == "true" && "${REALITY_WATCHER_EXTERNAL:-}" != "true" ]]; then
     start_reality_watcher "$CADDY_CONF_DIR/Caddyfile" &
     watcher_pid=$!
   fi
