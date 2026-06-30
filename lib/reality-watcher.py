@@ -59,103 +59,35 @@ def extract_reality_config(config: dict) -> tuple[str, str]:
     return port, " ".join(sorted(all_names))
 
 
-def generate_layer4_block(reality_snis: str, reality_port: str) -> str:
-    if reality_snis and reality_port:
-        return f"""    layer4 {{
-        :{HTTP_FRONT_PORT} {{
-            @reality tls sni {reality_snis}
-            route @reality {{
-                proxy 127.0.0.1:{reality_port}
-            }}
-            @tls tls
-            route @tls {{
-                proxy 127.0.0.1:{NODE_PORT}
-            }}
-            route {{
-                proxy 127.0.0.1:{CADDY_HTTP_PORT}
-            }}
-        }}
-    }}"""
-    return f"""    layer4 {{
-        :{HTTP_FRONT_PORT} {{
-            @tls tls
-            route @tls {{
-                proxy 127.0.0.1:{NODE_PORT}
-            }}
-            route {{
-                proxy 127.0.0.1:{CADDY_HTTP_PORT}
-            }}
-        }}
-    }}"""
-
-
 def generate_caddy_config(reality_snis: str, reality_port: str) -> str:
+    template_path = os.path.join(os.path.dirname(__file__), "Caddyfile.template")
+    with open(template_path) as f:
+        content = f.read()
+
     admin_line = f"admin unix/{CADDY_ADMIN_SOCK}"
-    layer4 = generate_layer4_block(reality_snis, reality_port)
+    reality_block = ""
+    if reality_snis and reality_port:
+        reality_block = "\n".join([
+            f"            @reality tls sni {reality_snis}",
+            "            route @reality {",
+            f"                proxy 127.0.0.1:{reality_port}",
+            "            }",
+        ])
 
-    return f"""\
-{{
-    {admin_line}
-    auto_https off
-    persist_config off
+    replacements = {
+        "${CADDY_ADMIN_LINE}": admin_line,
+        "${REALITY_ROUTE_BLOCK}": reality_block,
+        "${HTTP_FRONT_PORT}": HTTP_FRONT_PORT,
+        "${NODE_PORT}": NODE_PORT,
+        "${CADDY_HTTP_PORT}": CADDY_HTTP_PORT,
+        "${XHTTP_UPSTREAM_PORT}": XHTTP_UPSTREAM_PORT,
+        "${WS_UPSTREAM_PORT}": WS_UPSTREAM_PORT,
+        "${CADDY_SITE_DIR}": CADDY_SITE_DIR,
+    }
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
 
-    log {{
-        level WARN
-        exclude http.handlers.reverse_proxy
-    }}
-    log reverse-proxy {{
-        level ERROR
-        include http.handlers.reverse_proxy
-    }}
-
-{layer4}
-
-    servers :{CADDY_HTTP_PORT} {{
-        protocols h1
-    }}
-}}
-
-http://:{CADDY_HTTP_PORT} {{
-    handle /health {{
-        respond "ok" 200
-    }}
-
-    handle /xh-* {{
-        reverse_proxy 127.0.0.1:{XHTTP_UPSTREAM_PORT} {{
-            flush_interval -1
-        }}
-    }}
-
-    handle /ws-* {{
-        reverse_proxy 127.0.0.1:{WS_UPSTREAM_PORT} {{
-            flush_interval -1
-        }}
-    }}
-
-    handle /node/* {{
-        reverse_proxy https://127.0.0.1:{NODE_PORT} {{
-            transport http {{
-                tls_insecure_skip_verify
-            }}
-        }}
-    }}
-
-    handle /vision/* {{
-        reverse_proxy https://127.0.0.1:{NODE_PORT} {{
-            transport http {{
-                tls_insecure_skip_verify
-            }}
-        }}
-    }}
-
-    handle {{
-        root * "{CADDY_SITE_DIR}"
-        try_files {{path}} {{path}}/ /index.html
-        encode gzip
-        file_server
-    }}
-}}
-"""
+    return content
 
 
 def hash_string(s: str) -> str:

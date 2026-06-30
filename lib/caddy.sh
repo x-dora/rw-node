@@ -313,118 +313,34 @@ setup_caddy_static_site() {
     publish_static_site "${staging_dir}" "${final_site_dir}"
 }
 
-write_caddy_layer4_block() {
-    local reality_snis="${1:-}"
-    local reality_port="${2:-}"
-
-    if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
-        cat << LAYER4_EOF
-    layer4 {
-        :${HTTP_FRONT_PORT} {
-            @reality tls sni ${reality_snis}
-            route @reality {
-                proxy 127.0.0.1:${reality_port}
-            }
-            @tls tls
-            route @tls {
-                proxy 127.0.0.1:${NODE_PORT}
-            }
-            route {
-                proxy 127.0.0.1:${CADDY_HTTP_PORT}
-            }
-        }
-    }
-LAYER4_EOF
-    else
-        cat << LAYER4_EOF
-    layer4 {
-        :${HTTP_FRONT_PORT} {
-            @tls tls
-            route @tls {
-                proxy 127.0.0.1:${NODE_PORT}
-            }
-            route {
-                proxy 127.0.0.1:${CADDY_HTTP_PORT}
-            }
-        }
-    }
-LAYER4_EOF
-    fi
-}
-
 write_caddy_config() {
     local config_path="$1"
     local reality_snis="${2:-}"
     local reality_port="${3:-}"
-    local admin_line="admin off"
+    local template_path="${_CADDY_LIB_DIR}/Caddyfile.template"
 
-    if [[ "${REALITY_SPLIT_ENABLED:-true}" == "true" ]]; then
-        admin_line="admin unix/${CADDY_ADMIN_SOCK}"
+    [[ -f "${template_path}" ]] || fail "Caddy template not found: ${template_path}"
+
+    local admin_line="admin off"
+    [[ "${REALITY_SPLIT_ENABLED:-true}" != "true" ]] || admin_line="admin unix/${CADDY_ADMIN_SOCK}"
+
+    local reality_block=""
+    if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
+        printf -v reality_block '            @reality tls sni %s\n            route @reality {\n                proxy 127.0.0.1:%s\n            }' \
+            "${reality_snis}" "${reality_port}"
     fi
 
-    cat > "${config_path}" << EOF
-{
-    ${admin_line}
-    auto_https off
-    persist_config off
-
-    log {
-        level WARN
-        exclude http.handlers.reverse_proxy
-    }
-    log reverse-proxy {
-        level ERROR
-        include http.handlers.reverse_proxy
-    }
-
-$(write_caddy_layer4_block "${reality_snis}" "${reality_port}")
-
-    servers :${CADDY_HTTP_PORT} {
-        protocols h1
-    }
-}
-
-http://:${CADDY_HTTP_PORT} {
-    handle /health {
-        respond "ok" 200
-    }
-
-    handle /xh-* {
-        reverse_proxy 127.0.0.1:${XHTTP_UPSTREAM_PORT} {
-            flush_interval -1
-        }
-    }
-
-    handle /ws-* {
-        reverse_proxy 127.0.0.1:${WS_UPSTREAM_PORT} {
-            flush_interval -1
-        }
-    }
-
-    handle /node/* {
-        reverse_proxy https://127.0.0.1:${NODE_PORT} {
-            transport http {
-                tls_insecure_skip_verify
-            }
-        }
-    }
-
-    handle /vision/* {
-        reverse_proxy https://127.0.0.1:${NODE_PORT} {
-            transport http {
-                tls_insecure_skip_verify
-            }
-        }
-    }
-
-    handle {
-        root * "${CADDY_SITE_DIR}"
-        try_files {path} {path}/ /index.html
-        encode gzip
-        file_server
-    }
-}
-EOF
+    local content
+    content="$(<"${template_path}")"
+    content="${content//\$\{CADDY_ADMIN_LINE\}/${admin_line}}"
+    content="${content//\$\{REALITY_ROUTE_BLOCK\}/${reality_block}}"
+    content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"
+    content="${content//\$\{NODE_PORT\}/${NODE_PORT}}"
+    content="${content//\$\{CADDY_HTTP_PORT\}/${CADDY_HTTP_PORT}}"
+    content="${content//\$\{XHTTP_UPSTREAM_PORT\}/${XHTTP_UPSTREAM_PORT}}"
+    content="${content//\$\{WS_UPSTREAM_PORT\}/${WS_UPSTREAM_PORT}}"
+    content="${content//\$\{CADDY_SITE_DIR\}/${CADDY_SITE_DIR}}"
+    printf '%s\n' "${content}" > "${config_path}"
 }
 
 extract_reality_config_jq() {

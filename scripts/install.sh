@@ -225,7 +225,7 @@ download_lib_scripts() {
     print_step "下载共享库脚本..."
     mkdir -p "${INSTALL_DIR}/lib"
 
-    local lib_files=(core.sh caddy.sh provision.sh cloudflared.sh reality-watcher.js reality-watcher.py)
+    local lib_files=(core.sh caddy.sh provision.sh cloudflared.sh reality-watcher.js reality-watcher.py Caddyfile.template)
     for f in "${lib_files[@]}"; do
         download_repo_file "$ref" "lib/${f}" "${INSTALL_DIR}/lib/${f}"
     done
