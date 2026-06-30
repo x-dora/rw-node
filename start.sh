@@ -32,6 +32,7 @@ LIB_FILES=(
   cloudflared.sh
   reality-watcher.js
   reality-watcher.py
+  Caddyfile.template
 )
 
 log() {
