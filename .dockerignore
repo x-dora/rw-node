@@ -3,7 +3,7 @@
 docs
 scripts
 config/systemd
-config/certs
+config/panel
 renovate.json
 *.md
 !README.md

@@ -25,11 +25,23 @@ PaaS 前置通常无法透传 Remnawave Node 原本使用的客户端证书，�
 NODE_TLS_CLIENT_AUTH=none
 ```
 
-同时，Remnawave Panel 需要信任 PaaS HTTPS 域名的公共证书链。做法是在 Panel 端数据库中找到 `keygen` 记录，把 PaaS HTTPS 域名证书链对应的 Root CA 追加到 `ca_cert` 字段。
+同时，Remnawave Panel 源码硬编码了 `rejectUnauthorized: true`，且只信任 Panel 自身 CA 签发的证书。PaaS 场景下节点位于平台 HTTPS 反代之后，Panel 看到的是平台公共证书（如 Let's Encrypt）而非节点自签证书，因此需要让 Panel 同时信任系统公共 Root CA。
 
-仓库提供了一个常见免费/托管平台 Root CA 参考包：[`config/certs/free-provider-root-ca-bundle.pem`](../config/certs/free-provider-root-ca-bundle.pem)。具体包含哪些 Root CA，见 [PaaS Root CA 参考](../config/certs/README.md)。
+做法是将本仓库提供的预加载脚本 [`config/panel/disable-tls-verify.cjs`](../config/panel/disable-tls-verify.cjs) 挂载到 Panel 容器，并通过 `NODE_OPTIONS` 在启动时加载。该脚本会将 Node.js 内置的系统公共 Root CA（Mozilla CA bundle）合并到 Panel 的信任链中，使 Panel 既信任自身 CA 签发的直连节点证书，也信任 PaaS 平台的公共 HTTPS 证书，同时仍然拒绝中间人的随机自签证书。
 
-如果 PaaS 使用自定义域名证书、私有 CA、企业代理证书或特殊区域证书链，需要额外追加实际链路对应的 Root CA。不要把节点自签证书当作 PaaS HTTPS 域名的 Root CA 使用。
+Panel docker-compose 示例：
+
+```yaml
+services:
+  remnawave:
+    image: remnawave/backend:latest
+    volumes:
+      - ./disable-tls-verify.cjs:/opt/app/disable-tls-verify.cjs:ro
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=16384 --require /opt/app/disable-tls-verify.cjs
+```
+
+> `--max-old-space-size=16384` 是 Panel 镜像原有的 `NODE_OPTIONS` 默认值，必须保留。如果 Panel 拆分部署（rest-api / scheduler / processor），每个服务都需要同样的 `volumes` 和 `NODE_OPTIONS`。
 
 ## 快速示例
 
@@ -175,7 +187,7 @@ REALITY 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置
 
 1. Remnawave Panel 中节点地址是否填写 PaaS 提供的 HTTPS 域名。
 2. 节点环境变量是否设置了 `NODE_TLS_CLIENT_AUTH=none`。
-3. Panel 数据库 `keygen.ca_cert` 字段是否包含该 HTTPS 域名证书链对应的 Root CA。
+3. Panel 容器是否配置了 `NODE_OPTIONS` 预加载脚本以信任 PaaS 平台公共证书，详见上方「推荐链路」部分。
 
 ### `application entrypoint is missing`
 

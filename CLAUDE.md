@@ -66,6 +66,7 @@ Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做 TLS/非 TLS 分流：
 - `config/start.sh` — 裸机启动脚本（source lib/ 共享库）
 - `config/systemd/rw-node.service` — systemd 服务定义
 - `config/env.sample` — 环境变量模板
+- `config/panel/disable-tls-verify.cjs` — Panel 证书校验预加载脚本，PaaS 场景挂载到 Panel 容器跳过节点证书校验
 - `renovate.json` — Renovate 配置，自动追踪上游版本
 
 ## 开发与测试

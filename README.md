@@ -29,7 +29,7 @@ PaaS 场景通常使用平台分配的 HTTPS 域名作为 Remnawave Panel 中的
 https://rw-node.example-paas.app
 ```
 
-Panel 端还需要信任该 HTTPS 域名证书链对应的 Root CA。详细配置见 [PaaS HTTPS 直连文档](docs/paas.md)。
+Panel 端还需要配置 `NODE_OPTIONS` 预加载脚本以信任 PaaS 平台公共证书。详细配置见 [PaaS HTTPS 直连文档](docs/paas.md)。
 
 ### Docker Compose
 
@@ -83,14 +83,14 @@ PaaS 镜像还支持 `PORT`、`HTTP_FRONT_ENABLED`、`HTTP_FRONT_PORT`、`XHTTP_
 
 - `SECRET_KEY` 必须和 Remnawave Panel 中配置的节点密钥一致。
 - `INTERNAL_REST_PORT` 是内部端口，不应通过 Docker、VPS 防火墙或 PaaS 入站公开。
-- PaaS HTTPS 直连推荐设置 `NODE_TLS_CLIENT_AUTH=none`，并在 Panel 端追加 PaaS HTTPS 域名证书链对应的 Root CA。
+- PaaS HTTPS 直连推荐设置 `NODE_TLS_CLIENT_AUTH=none`，并在 Panel 端通过 `NODE_OPTIONS` 预加载脚本信任 PaaS 平台公共证书。
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node`，也不要把 `RW_NODE_DIR` 指向空目录，否则可能覆盖镜像内应用文件并导致 `application entrypoint is missing`。
 
 ## 详细文档
 
 - [PaaS HTTPS 直连](docs/paas.md)
 - [一键脚本安装](docs/install-script.md)
-- [PaaS Root CA 参考包](config/certs/README.md)
+- [Panel 证书校验预加载脚本](config/panel/disable-tls-verify.cjs)
 
 ## 许可证
 
