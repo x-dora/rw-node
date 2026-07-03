@@ -1,5 +1,20 @@
 # Go implementation PaaS HTTPS direct Dockerfile.
 # Downloads rw-node-go release assets and starts the Caddy Layer 4 front.
+
+FROM golang:1.24-alpine AS caddy-builder
+
+ARG CADDY_VERSION=latest
+ARG TARGETARCH
+ARG TARGETOS=linux
+
+RUN apk add --no-cache git \
+    && go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+    xcaddy build ${CADDY_VERSION} \
+      --with github.com/mholt/caddy-l4 \
+      --output /usr/bin/caddy
+
 FROM alpine:3.23
 
 ARG RW_NODE_GO_REPO=x-dora/rw-node-go
@@ -11,6 +26,8 @@ LABEL org.opencontainers.image.description="Remnawave Node Go Implementation - P
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 WORKDIR /opt/rw-node
+
+COPY --from=caddy-builder /usr/bin/caddy /usr/local/bin/caddy
 
 RUN set -ex; \
     apk add --no-cache bash busybox-extras ca-certificates curl jq tar unzip; \
@@ -25,9 +42,6 @@ RUN set -ex; \
     test -n "${RW_NODE_GO_VERSION}"; \
     curl -fsSL "https://github.com/${RW_NODE_GO_REPO}/releases/download/${RW_NODE_GO_VERSION}/${GO_ASSET}" -o /tmp/rw-node-go.tar.gz; \
     mkdir -p /tmp/rw-node-go /usr/local/share/xray /opt/rw-node/default-www; \
-    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${TARGETARCH}&p=github.com/mholt/caddy-l4" \
-      -o /usr/local/bin/caddy; \
-    chmod 755 /usr/local/bin/caddy; \
     tar -xzf /tmp/rw-node-go.tar.gz -C /tmp/rw-node-go; \
     install -m 755 /tmp/rw-node-go/rw-node-go /usr/local/bin/rw-node-go; \
     install -m 644 /tmp/rw-node-go/geoip.dat /usr/local/share/xray/geoip.dat; \
