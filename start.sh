@@ -137,10 +137,9 @@ cleanup() {
     fi
   done
 
-  wait "$app_pid" 2>/dev/null || true
-  wait "$caddy_pid" 2>/dev/null || true
-  wait "$cloudflared_pid" 2>/dev/null || true
-  wait "$watcher_pid" 2>/dev/null || true
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid"; do
+    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+  done
   exit "$code"
 }
 
@@ -152,8 +151,6 @@ main() {
   cd "$CWD"
   load_env_file
   set_default_env
-  inspect_env_if_requested
-  dry_run_if_requested
 
   require_command curl
   require_command mktemp
