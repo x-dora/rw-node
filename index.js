@@ -41,6 +41,9 @@ if (!process.env.HTTP_FRONT_PORT) {
 if (!process.env.CADDY_HTTP_PORT) {
   process.env.CADDY_HTTP_PORT = String(parseInt(process.env.HTTP_FRONT_PORT, 10) + 1);
 }
+if (!process.env.CADDY_HTTP_SOCK) {
+  process.env.CADDY_HTTP_SOCK = path.join(INSTALL_DIR, 'caddy', 'http.sock');
+}
 if (!process.env.CADDY_ADMIN_SOCK) {
   process.env.CADDY_ADMIN_SOCK = path.join(INSTALL_DIR, 'caddy', 'admin.sock');
 }

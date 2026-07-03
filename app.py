@@ -83,6 +83,9 @@ def main() -> int:
         "CADDY_HTTP_PORT", str(int(os.environ["HTTP_FRONT_PORT"]) + 1)
     )
     os.environ.setdefault(
+        "CADDY_HTTP_SOCK", str(INSTALL_DIR / "caddy" / "http.sock")
+    )
+    os.environ.setdefault(
         "CADDY_ADMIN_SOCK", str(INSTALL_DIR / "caddy" / "admin.sock")
     )
     os.environ.setdefault("CADDY_BIN", str(INSTALL_DIR / "bin" / "caddy"))

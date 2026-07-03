@@ -13,6 +13,7 @@ CADDY_CONF_DIR="$INSTALL_DIR/conf/caddy"
 CADDY_DATA_DIR="$INSTALL_DIR/caddy/data"
 CADDY_CONFIG_DIR="$INSTALL_DIR/caddy/config"
 CADDY_ADMIN_SOCK="$INSTALL_DIR/caddy/admin.sock"
+CADDY_HTTP_SOCK="$INSTALL_DIR/caddy/http.sock"
 CADDY_SITE_DIR="${CADDY_SITE_DIR:-${INSTALL_DIR}/www}"
 CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-}"
 APP_BIN="$BIN_DIR/rw-node-go"
@@ -172,6 +173,7 @@ main() {
 
   CADDY_SKIP_PORT_WAIT=1
   mkdir -p "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+  rm -f "$CADDY_HTTP_SOCK" "$CADDY_ADMIN_SOCK"
   start_caddy_front
 
   trap handle_signal INT TERM
