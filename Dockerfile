@@ -1,7 +1,7 @@
 # Go implementation PaaS HTTPS direct Dockerfile.
 # Downloads rw-node-go release assets and starts the Caddy Layer 4 front.
 
-FROM golang:1.24-alpine AS caddy-builder
+FROM golang:1.25-alpine AS caddy-builder
 
 ARG CADDY_VERSION=latest
 ARG TARGETARCH
