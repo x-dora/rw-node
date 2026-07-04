@@ -64,7 +64,7 @@ def generate_caddy_config(reality_snis: str, reality_port: str) -> str:
         content = f.read()
 
     admin_line = (
-        f"admin unix/{CADDY_ADMIN_SOCK}"
+        f"admin unix/{CADDY_ADMIN_SOCK} {{\n        enforce_origin\n    }}"
         if os.environ.get("REALITY_SPLIT_ENABLED", "true") != "false"
         else "admin off"
     )

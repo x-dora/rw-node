@@ -322,7 +322,9 @@ write_caddy_config() {
     [[ -f "${template_path}" ]] || fail "Caddy template not found: ${template_path}"
 
     local admin_line="admin off"
-    [[ "${REALITY_SPLIT_ENABLED:-true}" != "true" ]] || admin_line="admin unix/${CADDY_ADMIN_SOCK}"
+    [[ "${REALITY_SPLIT_ENABLED:-true}" != "true" ]] || admin_line="admin unix/${CADDY_ADMIN_SOCK} {
+        enforce_origin
+    }"
 
     local reality_block=""
     if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
