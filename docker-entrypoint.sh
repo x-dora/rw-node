@@ -78,8 +78,8 @@ cd "${WORK_DIR}"
 "${APP_BIN}" &
 app_pid=$!
 
-if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${REALITY_SPLIT_ENABLED}" == "true" ]]; then
-    start_reality_watcher "${CONF_DIR}/caddy/Caddyfile" &
+if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${INBOUND_WATCHER_ENABLED}" == "true" ]]; then
+    start_inbound_watcher "${CONF_DIR}/caddy/Caddyfile" &
     watcher_pid=$!
 fi
 

@@ -98,9 +98,9 @@ cd "${WORK_DIR}"
 "${APP_BIN}" &
 app_pid=$!
 
-# ── 启动 REALITY 动态分流 watcher（可选）─────────────────────
-if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${REALITY_SPLIT_ENABLED}" == "true" ]]; then
-    start_reality_watcher "${CADDY_CONF_DIR}/Caddyfile" &
+# ── 启动 Inbound 动态分流 watcher（可选）─────────────────────
+if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${INBOUND_WATCHER_ENABLED}" == "true" ]]; then
+    start_inbound_watcher "${CADDY_CONF_DIR}/Caddyfile" &
     watcher_pid=$!
 fi
 

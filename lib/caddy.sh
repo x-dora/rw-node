@@ -315,56 +315,78 @@ setup_caddy_static_site() {
 
 write_caddy_config() {
     local config_path="$1"
-    local reality_snis="${2:-}"
-    local reality_port="${3:-}"
+    local l4_block="${2:-}"
+    local http_block="${3:-}"
     local template_path="${_CADDY_LIB_DIR}/Caddyfile.template"
 
     [[ -f "${template_path}" ]] || fail "Caddy template not found: ${template_path}"
 
     local admin_line="admin off"
-    [[ "${REALITY_SPLIT_ENABLED:-true}" != "true" ]] || admin_line="admin unix/${CADDY_ADMIN_SOCK}"
+    [[ "${INBOUND_WATCHER_ENABLED:-true}" != "true" ]] || admin_line="admin unix/${CADDY_ADMIN_SOCK}"
 
-    local reality_block=""
-    if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
-        printf -v reality_block '                @reality tls sni %s\n                route @reality {\n                    proxy 127.0.0.1:%s\n                }' \
-            "${reality_snis}" "${reality_port}"
+    if [[ -z "${http_block}" ]]; then
+        printf -v http_block '    handle /xh-* {\n        reverse_proxy 127.0.0.1:%s {\n            flush_interval -1\n        }\n    }\n\n    handle /ws-* {\n        reverse_proxy 127.0.0.1:%s {\n            flush_interval -1\n        }\n    }' \
+            "${XHTTP_UPSTREAM_PORT}" "${WS_UPSTREAM_PORT}"
     fi
 
     local content
     content="$(<"${template_path}")"
     content="${content//\$\{CADDY_ADMIN_LINE\}/${admin_line}}"
-    content="${content//\$\{REALITY_ROUTE_BLOCK\}/${reality_block}}"
+    content="${content//\$\{L4_ROUTE_BLOCK\}/${l4_block}}"
+    content="${content//\$\{HTTP_ROUTE_BLOCK\}/${http_block}}"
     content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"
     content="${content//\$\{NODE_PORT\}/${NODE_PORT}}"
-    content="${content//\$\{XHTTP_UPSTREAM_PORT\}/${XHTTP_UPSTREAM_PORT}}"
-    content="${content//\$\{WS_UPSTREAM_PORT\}/${WS_UPSTREAM_PORT}}"
     content="${content//\$\{CADDY_SITE_DIR\}/${CADDY_SITE_DIR}}"
     printf '%s\n' "${content}" > "${config_path}"
 }
 
-extract_reality_config_jq() {
+extract_inbound_config_jq() {
     local config_json="$1"
 
     echo "${config_json}" | jq -r '
-        [.inbounds // [] | .[] |
-         select(.streamSettings.security == "reality") |
-         {
-           port: .port,
-           serverNames: (.streamSettings.realitySettings.serverNames // [])
-         }
-        ] |
-        if length == 0 then empty
-        else
-          {
-            port: (map(.port) | first),
-            serverNames: [map(.serverNames[]) | unique | .[]]
-          } |
-          "\(.port)\n\(.serverNames | join(" "))"
-        end
-    ' 2>/dev/null || true
+        def normalize_path: split("?")[0] | split("#")[0] | if startswith("/") then . else "/"+. end;
+        (.inbounds // []) as $ibs |
+        {
+          reality: [
+            $ibs[] |
+            select(.streamSettings.security == "reality") |
+            select(.streamSettings.realitySettings.serverNames | length > 0) |
+            { port: .port, serverNames: .streamSettings.realitySettings.serverNames }
+          ],
+          http: [
+            $ibs[] |
+            select(.streamSettings.security != "reality") |
+            select(.streamSettings.network as $n | $n == "ws" or $n == "xhttp" or $n == "httpupgrade") |
+            .streamSettings as $s |
+            (
+              if $s.network == "ws" then ($s.wsSettings.path // "")
+              elif $s.network == "xhttp" then ($s.xhttpSettings.path // "")
+              elif $s.network == "httpupgrade" then ($s.httpupgradeSettings.path // "")
+              else ""
+              end
+            ) as $path |
+            select($path != "") |
+            { path: ($path | normalize_path), port: .port, network: $s.network, tag: (.tag // "port:\(.port)") }
+          ]
+        } |
+        {
+          reality: (
+            .reality | group_by(.port) | map({
+              port: .[0].port,
+              serverNames: ([.[].serverNames[]] | unique | sort)
+            })
+          ),
+          http: .http
+        } |
+        {
+          reality: .reality,
+          http_valid: ([.http | group_by(.path)[] | select([.[].port] | unique | length == 1) | .[0]]),
+          http_conflicts: ([.http | group_by(.path)[] | select([.[].port] | unique | length > 1) | { path: .[0].path, tags: [.[] | "\(.tag)(port:\(.port))"] }])
+        }
+    ' 2>/dev/null || echo '{}'
 }
 
-_detect_reality_watcher_backend() {
+_detect_inbound_watcher_backend() {
     local preferred="${STARTER_RUNTIME:-}"
     if [[ -n "${preferred}" ]]; then
         local bin="${preferred}"
@@ -385,9 +407,9 @@ _detect_reality_watcher_backend() {
     return 1
 }
 
-_start_reality_watcher_jq() {
+_start_inbound_watcher_jq() {
     local config_path="$1"
-    local interval="${REALITY_SPLIT_INTERVAL:-15}"
+    local interval="${INBOUND_WATCHER_INTERVAL:-15}"
     local internal_url="http://127.0.0.1:${INTERNAL_REST_PORT}/internal/get-config"
     local prev_hash=""
 
@@ -412,18 +434,14 @@ _start_reality_watcher_jq() {
             continue
         fi
 
-        local reality_info
-        reality_info="$(extract_reality_config_jq "${config_json}")"
-        local reality_port=""
-        local reality_snis=""
-
-        if [[ -n "${reality_info}" ]]; then
-            reality_port="$(echo "${reality_info}" | head -1)"
-            reality_snis="$(echo "${reality_info}" | tail -1)"
+        local parsed
+        parsed="$(extract_inbound_config_jq "${config_json}")"
+        if [[ -z "${parsed}" || "${parsed}" == "{}" ]]; then
+            continue
         fi
 
         local current_hash
-        current_hash="$(printf '%s\n%s' "${reality_port}" "${reality_snis}" | md5sum | cut -d' ' -f1)"
+        current_hash="$(printf '%s' "${parsed}" | md5sum | cut -d' ' -f1)"
 
         if [[ "${current_hash}" == "${prev_hash}" ]]; then
             continue
@@ -431,30 +449,95 @@ _start_reality_watcher_jq() {
 
         prev_hash="${current_hash}"
 
-        if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
-            log "REALITY split detected: snis=[${reality_snis}] port=${reality_port}"
-            write_caddy_config "${config_path}" "${reality_snis}" "${reality_port}"
-        else
-            log "REALITY split cleared, reverting to default TLS routing"
-            write_caddy_config "${config_path}" "" ""
+        local l4_block=""
+        local http_block=""
+
+        local reality_count
+        reality_count="$(echo "${parsed}" | jq '.reality | length')"
+        if (( reality_count > 0 )); then
+            local i
+            for (( i=0; i<reality_count; i++ )); do
+                local port snis matcher_name
+                port="$(echo "${parsed}" | jq -r ".reality[$i].port")"
+                snis="$(echo "${parsed}" | jq -r ".reality[$i].serverNames | join(\" \")")"
+                if (( reality_count == 1 )); then
+                    matcher_name="reality"
+                else
+                    matcher_name="reality_${port}"
+                fi
+                l4_block+="                @${matcher_name} tls sni ${snis}"$'\n'
+                l4_block+="                route @${matcher_name} {"$'\n'
+                l4_block+="                    proxy 127.0.0.1:${port}"$'\n'
+                l4_block+="                }"
+                if (( i < reality_count - 1 )); then
+                    l4_block+=$'\n'
+                fi
+                log "L4 route: REALITY snis=[${snis}] -> 127.0.0.1:${port}"
+            done
         fi
 
+        local conflict_count
+        conflict_count="$(echo "${parsed}" | jq '.http_conflicts | length')"
+        if (( conflict_count > 0 )); then
+            local i
+            for (( i=0; i<conflict_count; i++ )); do
+                local cpath ctags
+                cpath="$(echo "${parsed}" | jq -r ".http_conflicts[$i].path")"
+                ctags="$(echo "${parsed}" | jq -r ".http_conflicts[$i].tags | join(\", \")")"
+                log "WARN: HTTP route conflict: path=${cpath} claimed by [${ctags}], skipped"
+            done
+        fi
+
+        local http_count
+        http_count="$(echo "${parsed}" | jq '.http_valid | length')"
+        if (( http_count > 0 )); then
+            local i
+            for (( i=0; i<http_count; i++ )); do
+                local rpath rport rnetwork path_pattern
+                rpath="$(echo "${parsed}" | jq -r ".http_valid[$i].path")"
+                rport="$(echo "${parsed}" | jq -r ".http_valid[$i].port")"
+                rnetwork="$(echo "${parsed}" | jq -r ".http_valid[$i].network")"
+                if [[ "${rpath}" == *'*' ]]; then
+                    path_pattern="${rpath}"
+                else
+                    path_pattern="${rpath}*"
+                fi
+                http_block+="    handle ${path_pattern} {"$'\n'
+                http_block+="        reverse_proxy 127.0.0.1:${rport} {"$'\n'
+                http_block+="            flush_interval -1"$'\n'
+                http_block+="        }"$'\n'
+                http_block+="    }"
+                if (( i < http_count - 1 )); then
+                    http_block+=$'\n'$'\n'
+                fi
+                log "HTTP route: ${rpath} [${rnetwork}] -> 127.0.0.1:${rport}"
+            done
+        else
+            if (( reality_count > 0 || conflict_count > 0 )); then
+                log "No HTTP path inbounds detected, using fallback wildcard routes"
+            fi
+            if (( reality_count == 0 && http_count == 0 && conflict_count == 0 )); then
+                log "No routeable inbounds detected, using default config"
+            fi
+        fi
+
+        write_caddy_config "${config_path}" "${l4_block}" "${http_block}"
         "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
 
         if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
-            log "Caddy reloaded with updated REALITY split config"
+            log "Caddy reloaded with updated inbound routing config"
         else
             log "WARN: Caddy reload failed, will retry next cycle"
         fi
     done
 }
 
-start_reality_watcher() {
+start_inbound_watcher() {
     local config_path="$1"
     local backend
 
-    if ! backend="$(_detect_reality_watcher_backend)"; then
-        log "WARN: REALITY dynamic split disabled (no jq, node, or python3 available)"
+    if ! backend="$(_detect_inbound_watcher_backend)"; then
+        log "WARN: Inbound watcher disabled (no jq, node, or python3 available)"
         return 0
     fi
 
@@ -462,25 +545,25 @@ start_reality_watcher() {
 
     case "${backend}" in
         jq)
-            log "REALITY watcher using jq backend"
-            _start_reality_watcher_jq "${config_path}"
+            log "Inbound watcher using jq backend"
+            _start_inbound_watcher_jq "${config_path}"
             ;;
         node)
-            local watcher_script="${_CADDY_LIB_DIR}/reality-watcher.js"
+            local watcher_script="${_CADDY_LIB_DIR}/inbound-watcher.js"
             if [[ ! -f "${watcher_script}" ]]; then
-                log "WARN: REALITY watcher script not found: ${watcher_script}"
+                log "WARN: Inbound watcher script not found: ${watcher_script}"
                 return 0
             fi
-            log "REALITY watcher using Node.js backend"
+            log "Inbound watcher using Node.js backend"
             node "${watcher_script}" "${config_path}"
             ;;
         python)
-            local watcher_script="${_CADDY_LIB_DIR}/reality-watcher.py"
+            local watcher_script="${_CADDY_LIB_DIR}/inbound-watcher.py"
             if [[ ! -f "${watcher_script}" ]]; then
-                log "WARN: REALITY watcher script not found: ${watcher_script}"
+                log "WARN: Inbound watcher script not found: ${watcher_script}"
                 return 0
             fi
-            log "REALITY watcher using Python backend"
+            log "Inbound watcher using Python backend"
             python3 "${watcher_script}" "${config_path}"
             ;;
     esac

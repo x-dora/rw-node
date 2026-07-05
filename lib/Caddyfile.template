@@ -20,7 +20,7 @@
         max_header_size 32KB
         listener_wrappers {
             layer4 {
-${REALITY_ROUTE_BLOCK}
+${L4_ROUTE_BLOCK}
                 @tls tls
                 route @tls {
                     proxy 127.0.0.1:${NODE_PORT}
@@ -35,17 +35,7 @@ http://:${HTTP_FRONT_PORT} {
         respond "ok" 200
     }
 
-    handle /xh-* {
-        reverse_proxy 127.0.0.1:${XHTTP_UPSTREAM_PORT} {
-            flush_interval -1
-        }
-    }
-
-    handle /ws-* {
-        reverse_proxy 127.0.0.1:${WS_UPSTREAM_PORT} {
-            flush_interval -1
-        }
-    }
+${HTTP_ROUTE_BLOCK}
 
     @node_api path /node/* /vision/*
     handle @node_api {

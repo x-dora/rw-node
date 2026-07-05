@@ -34,11 +34,11 @@ core.sh  ← 基础（日志、.env 解析、端口校验、架构检测）
 
 ### Caddyfile 模板系统
 
-`lib/Caddyfile.template` 是三端（Docker entrypoint / 裸机 start.sh / reality-watcher）共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符，由 `write_caddy_config()` (bash)、`generateCaddyConfig()` (JS/Python) 做字符串替换生成最终 Caddyfile。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。L4 处理通过 HTTP server 的 `listener_wrappers` 内嵌，而非独立 app，避免 Caddy app 启动顺序竞态。
+`lib/Caddyfile.template` 是三端（Docker entrypoint / 裸机 start.sh / inbound-watcher）共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符，由 `write_caddy_config()` (bash)、`generateCaddyConfig()` (JS/Python) 做字符串替换生成最终 Caddyfile。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。L4 处理通过 HTTP server 的 `listener_wrappers` 内嵌，而非独立 app，避免 Caddy app 启动顺序竞态。
 
-### REALITY 动态分流
+### Inbound 动态分流
 
-后台 watcher 轮询 rw-node-go 内部 API（`/internal/get-config`），提取 REALITY inbound 的 `serverNames` 和端口，自动生成 Caddy L4 SNI 分流规则并热重载。三种后端按优先级自动选择：jq（内嵌在 `caddy.sh`） > Node.js（`reality-watcher.js`） > Python（`reality-watcher.py`）。
+后台 watcher 轮询 rw-node-go 内部 API（`/internal/get-config`），提取所有可分流的 inbound 配置，自动生成 Caddy 分流规则并热重载。支持 REALITY SNI 分流（L4 层）和 ws/xhttp/httpupgrade 路径分流（HTTP 层），含冲突检测和兜底路由。三种后端按优先级自动选择：jq（内嵌在 `caddy.sh`） > Node.js（`inbound-watcher.js`） > Python（`inbound-watcher.py`）。
 
 ### 流量路由（PaaS 单端口复用）
 
@@ -46,8 +46,8 @@ Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做 TLS/非 TLS 分流：
 - TLS ClientHello → TCP 直通到 `NODE_PORT`（不终止 TLS）
 - REALITY SNI 匹配 → TCP 直通到 Xray 端口（watcher 动态注入）
 - 非 TLS → 直接由 HTTP handler 处理路径路由（通过 `listener_wrappers` 穿透）：
-  - `/xh-*` → `XHTTP_UPSTREAM_PORT`（明文 HTTP）
-  - `/ws-*` → `WS_UPSTREAM_PORT`（明文 HTTP）
+  - ws/xhttp/httpupgrade 精确路径 → 对应 inbound 端口（watcher 动态注入）
+  - 兜底：`/xh-*` → `XHTTP_UPSTREAM_PORT`、`/ws-*` → `WS_UPSTREAM_PORT`
   - `/node/*`、`/vision/*` → `NODE_PORT` HTTPS API（`tls_insecure_skip_verify`）
   - 其他 → 静态伪装页面
 
@@ -56,13 +56,13 @@ Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做 TLS/非 TLS 分流：
 - `scripts/install.sh` — 一键安装脚本（bash），安装 rw-node-go、Caddy L4、Xray geodata、共享库
 - `scripts/uninstall.sh` — 卸载脚本
 - `Dockerfile` — Go 实现 PaaS HTTPS 直连镜像
-- `docker-entrypoint.sh` — PaaS 入口脚本，启动 Caddy L4 前置 + rw-node-go + REALITY watcher
+- `docker-entrypoint.sh` — PaaS 入口脚本，启动 Caddy L4 前置 + rw-node-go + inbound watcher
 - `lib/core.sh` — 核心工具库
-- `lib/caddy.sh` — Caddy 管理（含 jq 版 REALITY watcher）
+- `lib/caddy.sh` — Caddy 管理（含 jq 版 inbound watcher）
 - `lib/Caddyfile.template` — Caddy 配置模板（三端共用）
 - `lib/provision.sh` — 组件下载安装库
 - `lib/cloudflared.sh` — Cloudflare Tunnel 管理
-- `lib/reality-watcher.js` / `lib/reality-watcher.py` — REALITY watcher 的 Node.js/Python 后端
+- `lib/inbound-watcher.js` / `lib/inbound-watcher.py` — Inbound watcher 的 Node.js/Python 后端
 - `config/start.sh` — 裸机启动脚本（source lib/ 共享库）
 - `config/systemd/rw-node.service` — systemd 服务定义
 - `config/env.sample` — 环境变量模板
@@ -110,8 +110,8 @@ PaaS 版额外变量：
 - `XHTTP_UPSTREAM_PORT` / `WS_UPSTREAM_PORT` — xhttp/WebSocket 上游端口（默认 8080/8880）
 - `CADDY_INDEX_PAGE` — 静态伪装页面（默认 `mikutap`，支持多个预设和自定义 URL）
 - `CADDY_DEFAULT_SITE_DIR` — 镜像内置默认静态页面目录
-- `REALITY_SPLIT_ENABLED` — REALITY TLS 动态分流开关（默认 `true`）
-- `REALITY_SPLIT_INTERVAL` — watcher 轮询间隔秒数（默认 `15`）
+- `INBOUND_WATCHER_ENABLED` — Inbound 动态分流开关（默认 `true`）
+- `INBOUND_WATCHER_INTERVAL` — watcher 轮询间隔秒数（默认 `15`）
 - `ARGO_TOKEN` — Cloudflare Tunnel Token（设置后启用 cloudflared）
 
 ## 注意事项

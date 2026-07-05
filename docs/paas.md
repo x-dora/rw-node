@@ -149,12 +149,19 @@ docker run -d \
 | `CADDY_SITE_DIR` | `${RW_NODE_DIR}/www` | Caddy 静态伪装页面生成目录，启动时会重建；自定义非空目录需要 `.rw-node-caddy-site-dir` marker |
 | `CADDY_DEFAULT_SITE_DIR` | `/opt/rw-node/default-www` | 镜像内置默认静态页面目录，通常不需要手动设置 |
 | `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS 镜像内应用文件目录，通常不要修改 |
-| `REALITY_SPLIT_ENABLED` | `true` | 是否启用 REALITY TLS 动态分流，详见下方说明 |
-| `REALITY_SPLIT_INTERVAL` | `15` | REALITY 分流 watcher 轮询间隔（秒） |
+| `INBOUND_WATCHER_ENABLED` | `true` | 是否启用 Inbound 动态分流 watcher，详见下方说明 |
+| `INBOUND_WATCHER_INTERVAL` | `15` | Inbound watcher 轮询间隔（秒） |
 
-## REALITY TLS 动态分流
+## Inbound 动态分流
 
-Go PaaS 镜像默认启用 REALITY TLS 动态分流（`REALITY_SPLIT_ENABLED=true`）。启用后，后台 watcher 会轮询 rw-node-go 内部 API，自动提取 Panel 下发的 REALITY inbound 配置（`serverNames` 和端口），生成 Caddy Layer 4 SNI 分流规则并热重载 Caddy。
+Go PaaS 镜像默认启用 Inbound 动态分流（`INBOUND_WATCHER_ENABLED=true`）。启用后，后台 watcher 会轮询 rw-node-go 内部 API，自动提取 Panel 下发的所有 inbound 配置，按协议类型生成对应的分流规则并热重载 Caddy。
+
+支持的分流方式：
+
+- **REALITY SNI 分流**（L4 层）：提取 REALITY inbound 的 `serverNames` 和端口，生成 Caddy Layer 4 SNI 规则，TLS + 匹配的 SNI 直通到对应 Xray 端口
+- **HTTP 路径分流**（HTTP 层）：提取 ws/xhttp/httpupgrade inbound 的 path 和端口，为每个 path 生成精确路由规则
+- **冲突检测**：同一 path 被多个不同端口的 inbound 使用时，发出警告并跳过该 path
+- **兜底路由**：无具体 ws/xhttp inbound 时，保留 `/xh-*` → `XHTTP_UPSTREAM_PORT` 和 `/ws-*` → `WS_UPSTREAM_PORT` 通配符路由
 
 分流效果：
 
@@ -163,13 +170,16 @@ PaaS 入站端口
   ├─ TLS + SNI 匹配 REALITY 伪装域名 → 127.0.0.1:REALITY_PORT（TCP 直通）
   ├─ TLS + 其他 SNI（Panel 连接等）   → 127.0.0.1:NODE_PORT
   └─ 非 TLS                           → Caddy HTTP 路径路由
+                                          ├─ /ws-a  → 127.0.0.1:8080
+                                          ├─ /xh-b  → 127.0.0.1:8081
+                                          └─ 其他   → 静态伪装页面
 ```
 
 Panel 连接使用 PaaS HTTPS 域名作为 SNI，REALITY 客户端使用伪装域名（如 `www.microsoft.com`）作为 SNI，两者天然不同，Caddy Layer 4 可以按 SNI 区分。
 
-REALITY 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置变化，仅在 `serverNames` 或端口改变时重载 Caddy。Panel 未下发配置或没有 REALITY inbound 时，保持默认行为（所有 TLS → NODE_PORT）。
+Inbound 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置变化，仅在路由状态改变时重载 Caddy。Panel 未下发配置或没有可分流的 inbound 时，保持默认兜底行为。
 
-设为 `REALITY_SPLIT_ENABLED=false` 可完全禁用此功能。
+设为 `INBOUND_WATCHER_ENABLED=false` 可完全禁用此功能。
 
 ## xhttp / WebSocket 路径
 
