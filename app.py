@@ -13,7 +13,7 @@ PREFIX = "[python-starter]"
 ROOT_DIR = Path(__file__).resolve().parent
 START_SCRIPT = ROOT_DIR / "start.sh"
 INSTALL_DIR = ROOT_DIR / ".rw-node"
-WATCHER_SCRIPT = INSTALL_DIR / "lib" / "reality-watcher.py"
+WATCHER_SCRIPT = INSTALL_DIR / "lib" / "inbound-watcher.py"
 WATCHER_CONFIG_PATH = str(INSTALL_DIR / "conf" / "caddy" / "Caddyfile")
 
 child_process = None
@@ -41,7 +41,7 @@ def run_watcher() -> None:
     while not WATCHER_SCRIPT.exists():
         time.sleep(0.5)
     spec = importlib.util.spec_from_file_location(
-        "reality_watcher", str(WATCHER_SCRIPT)
+        "inbound_watcher", str(WATCHER_SCRIPT)
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -94,10 +94,10 @@ def main() -> int:
     child_process = subprocess.Popen(
         ["bash", str(START_SCRIPT)],
         cwd=ROOT_DIR,
-        env={**os.environ, "REALITY_WATCHER_EXTERNAL": "true"},
+        env={**os.environ, "INBOUND_WATCHER_EXTERNAL": "true"},
     )
 
-    if os.environ.get("REALITY_SPLIT_ENABLED", "true") != "false":
+    if os.environ.get("INBOUND_WATCHER_ENABLED", "true") != "false":
         threading.Thread(target=run_watcher, daemon=True).start()
 
     return_code = child_process.wait()

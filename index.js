@@ -9,7 +9,7 @@ const PREFIX = '[node-starter]';
 const ROOT_DIR = __dirname;
 const START_SCRIPT = path.join(ROOT_DIR, 'start.sh');
 const INSTALL_DIR = path.join(ROOT_DIR, '.rw-node');
-const WATCHER_SCRIPT = path.join(INSTALL_DIR, 'lib', 'reality-watcher.js');
+const WATCHER_SCRIPT = path.join(INSTALL_DIR, 'lib', 'inbound-watcher.js');
 const WATCHER_CONFIG_PATH = path.join(INSTALL_DIR, 'conf', 'caddy', 'Caddyfile');
 
 if (!fs.existsSync(START_SCRIPT)) {
@@ -56,11 +56,11 @@ if (!process.env.CADDY_SITE_DIR) {
 
 const child = spawn('bash', [START_SCRIPT], {
   cwd: ROOT_DIR,
-  env: { ...process.env, REALITY_WATCHER_EXTERNAL: 'true' },
+  env: { ...process.env, INBOUND_WATCHER_EXTERNAL: 'true' },
   stdio: 'inherit',
 });
 
-if (process.env.REALITY_SPLIT_ENABLED !== 'false') {
+if (process.env.INBOUND_WATCHER_ENABLED !== 'false') {
   (async () => {
     while (!fs.existsSync(WATCHER_SCRIPT)) {
       await new Promise((r) => setTimeout(r, 500));
