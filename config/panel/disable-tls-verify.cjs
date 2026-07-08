@@ -1,11 +1,13 @@
 const tls = require('tls');
-const _connect = tls.connect;
-tls.connect = function (options) {
-    if (options && typeof options === 'object' && options.ca) {
-        const systemCAs = tls.rootCertificates || [];
+const _createSecureContext = tls.createSecureContext;
+const systemCAs = [...(tls.rootCertificates || [])];
+
+tls.createSecureContext = function (options) {
+    if (options && options.ca && systemCAs.length > 0) {
+        options = { ...options };
         options.ca = Array.isArray(options.ca)
             ? [...options.ca, ...systemCAs]
             : [options.ca, ...systemCAs];
     }
-    return _connect.apply(this, arguments);
+    return _createSecureContext.call(this, options);
 };
