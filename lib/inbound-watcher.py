@@ -82,11 +82,15 @@ def extract_inbound_config(config: dict) -> dict:
 
     merged_reality = merge_reality_routes(reality_routes)
     http_routes, conflicts = resolve_http_routes(http_path_candidates)
+    panel_sni = config.get("panelSni")
+    if not isinstance(panel_sni, str):
+        panel_sni = ""
 
     return {
         "realityRoutes": merged_reality,
         "httpRoutes": http_routes,
         "conflicts": conflicts,
+        "panelSni": panel_sni,
     }
 
 
@@ -123,10 +127,15 @@ def resolve_http_routes(candidates: list[dict]) -> tuple[list[dict], list[dict]]
     return routes, conflicts
 
 
-def generate_l4_route_block(reality_routes: list[dict]) -> str:
-    if not reality_routes:
-        return ""
+def generate_l4_route_block(reality_routes: list[dict], panel_sni: str = "") -> str:
     lines = []
+    if panel_sni:
+        lines.append(f"                @panel tls sni {panel_sni}")
+        lines.append(f"                route @panel {{")
+        lines.append(f"                    proxy 127.0.0.1:{NODE_PORT}")
+        lines.append(f"                }}")
+    if not reality_routes:
+        return "\n".join(lines)
     for r in reality_routes:
         snis = " ".join(r["serverNames"])
         matcher = "reality" if len(reality_routes) == 1 else f"reality_{r['port']}"
@@ -167,7 +176,7 @@ def generate_http_route_block(http_routes: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def generate_caddy_config(l4_block: str, http_block: str) -> str:
+def generate_caddy_config(l4_block: str, http_block: str, panel_sni: str = "") -> str:
     template_path = os.path.join(os.path.dirname(__file__), "Caddyfile.template")
     with open(template_path) as f:
         content = f.read()
@@ -178,12 +187,17 @@ def generate_caddy_config(l4_block: str, http_block: str) -> str:
         else "admin off"
     )
 
+    # Upstream SNI for the node API when SNI_VERIFICATION is enabled on the
+    # node; the derived hostname is public tooling metadata, not a secret.
+    tls_server_name_line = f"                tls_server_name {panel_sni}" if panel_sni else ""
+
     replacements = {
         "${CADDY_ADMIN_LINE}": admin_line,
         "${L4_ROUTE_BLOCK}": l4_block,
         "${HTTP_ROUTE_BLOCK}": http_block,
         "${HTTP_FRONT_PORT}": HTTP_FRONT_PORT,
         "${NODE_PORT}": NODE_PORT,
+        "${NODE_TLS_SERVER_NAME}": tls_server_name_line,
         "${CADDY_SITE_DIR}": CADDY_SITE_DIR,
     }
     for placeholder, value in replacements.items():
@@ -268,15 +282,21 @@ def main(config_path=None) -> int:
             continue
 
         if not config:
-            continue
+            if isinstance(config, dict) and config.get("panelSni"):
+                # Panel SNI alone is still routeable: it feeds the node API
+                # upstream SNI before the first xray start.
+                pass
+            else:
+                continue
 
         result = extract_inbound_config(config)
         reality_routes = result["realityRoutes"]
         http_routes = result["httpRoutes"]
         conflicts = result["conflicts"]
+        panel_sni = result["panelSni"]
 
         hash_input = json.dumps(
-            {"realityRoutes": reality_routes, "httpRoutes": http_routes},
+            {"realityRoutes": reality_routes, "httpRoutes": http_routes, "panelSni": panel_sni},
             sort_keys=True,
         )
         current_hash = hash_string(hash_input)
@@ -289,6 +309,9 @@ def main(config_path=None) -> int:
         for c in conflicts:
             log(f"WARN: HTTP route conflict: path={c['path']} claimed by [{', '.join(c['tags'])}], skipped")
 
+        if panel_sni:
+            log(f"L4 route: PANEL sni={panel_sni} -> 127.0.0.1:{NODE_PORT}")
+
         if reality_routes:
             for r in reality_routes:
                 log(f"L4 route: REALITY snis=[{' '.join(r['serverNames'])}] -> 127.0.0.1:{r['port']}")
@@ -300,13 +323,16 @@ def main(config_path=None) -> int:
             log("No HTTP path inbounds detected, using fallback wildcard routes")
 
         if not reality_routes and not http_routes and not conflicts:
-            log("No routeable inbounds detected, using default config")
+            if panel_sni:
+                log("Only panel SNI detected, using default HTTP routes")
+            else:
+                log("No routeable inbounds detected, using default config")
 
-        l4_block = generate_l4_route_block(reality_routes)
+        l4_block = generate_l4_route_block(reality_routes, panel_sni)
         http_block = generate_http_route_block(http_routes)
 
         with open(config_path, "w") as f:
-            f.write(generate_caddy_config(l4_block, http_block))
+            f.write(generate_caddy_config(l4_block, http_block, panel_sni))
 
         caddy_fmt(config_path)
 

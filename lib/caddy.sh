@@ -317,6 +317,7 @@ write_caddy_config() {
     local config_path="$1"
     local l4_block="${2:-}"
     local http_block="${3:-}"
+    local panel_sni="${4:-}"
     local template_path="${_CADDY_LIB_DIR}/Caddyfile.template"
 
     [[ -f "${template_path}" ]] || fail "Caddy template not found: ${template_path}"
@@ -329,6 +330,18 @@ write_caddy_config() {
             "${XHTTP_UPSTREAM_PORT}" "${WS_UPSTREAM_PORT}"
     fi
 
+    local tls_server_name_line=""
+    if [[ -n "${panel_sni}" ]]; then
+        # Upstream SNI for the node API when SNI_VERIFICATION is enabled on
+        # the node; the derived hostname is public tooling metadata, not a secret.
+        tls_server_name_line="                tls_server_name ${panel_sni}"
+    fi
+
+    if [[ -n "${panel_sni}" && -z "${l4_block}" ]]; then
+        printf -v l4_block '                @panel tls sni %s\n                route @panel {\n                    proxy 127.0.0.1:%s\n                }' \
+            "${panel_sni}" "${NODE_PORT}"
+    fi
+
     local content
     content="$(<"${template_path}")"
     content="${content//\$\{CADDY_ADMIN_LINE\}/${admin_line}}"
@@ -336,6 +349,7 @@ write_caddy_config() {
     content="${content//\$\{HTTP_ROUTE_BLOCK\}/${http_block}}"
     content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"
     content="${content//\$\{NODE_PORT\}/${NODE_PORT}}"
+    content="${content//\$\{NODE_TLS_SERVER_NAME\}/${tls_server_name_line}}"
     content="${content//\$\{CADDY_SITE_DIR\}/${CADDY_SITE_DIR}}"
     printf '%s\n' "${content}" > "${config_path}"
 }
@@ -347,6 +361,7 @@ extract_inbound_config_jq() {
         def normalize_path: split("?")[0] | split("#")[0] | if startswith("/") then . else "/"+. end;
         (.inbounds // []) as $ibs |
         {
+          panelSni: (.panelSni // "" | if type == "string" then . else "" end),
           reality: [
             $ibs[] |
             select(.streamSettings.security == "reality") |
@@ -376,10 +391,12 @@ extract_inbound_config_jq() {
               serverNames: ([.[].serverNames[]] | unique | sort)
             })
           ),
-          http: .http
+          http: .http,
+          panelSni: .panelSni
         } |
         {
           reality: .reality,
+          panelSni: .panelSni,
           http_valid: ([.http | group_by(.path)[] | select([.[].port] | unique | length == 1) | .[0]]),
           http_conflicts: ([.http | group_by(.path)[] | select([.[].port] | unique | length > 1) | { path: .[0].path, tags: [.[] | "\(.tag)(port:\(.port))"] }])
         }
@@ -430,13 +447,23 @@ _start_inbound_watcher_jq() {
 
         local config_json
         config_json="$(curl -sS --max-time 5 "${internal_url}" 2>/dev/null || true)"
-        if [[ -z "${config_json}" || "${config_json}" == "{}" ]]; then
+        if [[ -z "${config_json}" ]]; then
             continue
         fi
 
         local parsed
         parsed="$(extract_inbound_config_jq "${config_json}")"
-        if [[ -z "${parsed}" || "${parsed}" == "{}" ]]; then
+        if [[ -z "${parsed}" ]]; then
+            continue
+        fi
+
+        local panel_sni
+        panel_sni="$(echo "${parsed}" | jq -r '.panelSni // ""')"
+        local reality_count
+        reality_count="$(echo "${parsed}" | jq '.reality | length')"
+        local http_valid_count
+        http_valid_count="$(echo "${parsed}" | jq '.http_valid | length')"
+        if (( reality_count == 0 && http_valid_count == 0 )) && [[ -z "${panel_sni}" ]] && [[ "${config_json}" == "{}" ]]; then
             continue
         fi
 
@@ -452,8 +479,17 @@ _start_inbound_watcher_jq() {
         local l4_block=""
         local http_block=""
 
-        local reality_count
-        reality_count="$(echo "${parsed}" | jq '.reality | length')"
+        if [[ -n "${panel_sni}" ]]; then
+            l4_block+="                @panel tls sni ${panel_sni}"$'\n'
+            l4_block+="                route @panel {"$'\n'
+            l4_block+="                    proxy 127.0.0.1:${NODE_PORT}"$'\n'
+            l4_block+="                }"
+            if (( reality_count > 0 )); then
+                l4_block+=$'\n'
+            fi
+            log "L4 route: PANEL sni=${panel_sni} -> 127.0.0.1:${NODE_PORT}"
+        fi
+
         if (( reality_count > 0 )); then
             local i
             for (( i=0; i<reality_count; i++ )); do
@@ -517,11 +553,15 @@ _start_inbound_watcher_jq() {
                 log "No HTTP path inbounds detected, using fallback wildcard routes"
             fi
             if (( reality_count == 0 && http_count == 0 && conflict_count == 0 )); then
-                log "No routeable inbounds detected, using default config"
+                if [[ -z "${panel_sni}" ]]; then
+                    log "No routeable inbounds detected, using default config"
+                else
+                    log "Only panel SNI detected, using default HTTP routes"
+                fi
             fi
         fi
 
-        write_caddy_config "${config_path}" "${l4_block}" "${http_block}"
+        write_caddy_config "${config_path}" "${l4_block}" "${http_block}" "${panel_sni}"
         "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
 
         if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
