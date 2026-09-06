@@ -15,6 +15,24 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
       --with github.com/mholt/caddy-l4 \
       --output /usr/bin/caddy
 
+# geocheck binary for the node stats/get-geocheck route, matching the official
+# node image layout (/usr/local/bin/geocheck).
+FROM --platform=$BUILDPLATFORM alpine:3.23 AS geocheck
+
+ARG GEOCHECK_VERSION=0.3.0
+ARG GEOCHECK_RELEASE_URL=https://github.com/remnawave/geocheck/releases/download
+ARG TARGETARCH
+
+RUN apk add --no-cache curl \
+    && cd /tmp \
+    && ARCHIVE="geocheck_linux_${TARGETARCH}.tar.gz" \
+    && curl -fsSL -O "${GEOCHECK_RELEASE_URL}/v${GEOCHECK_VERSION}/${ARCHIVE}" \
+    && curl -fsSL -O "${GEOCHECK_RELEASE_URL}/v${GEOCHECK_VERSION}/checksums.txt" \
+    && grep "  ${ARCHIVE}\$" checksums.txt | sha256sum -c - \
+    && tar -xzf "${ARCHIVE}" geocheck \
+    && install -m 0755 geocheck /usr/local/bin/geocheck \
+    && rm -rf /tmp/*
+
 FROM alpine:3.23
 
 ARG RW_NODE_GO_REPO=x-dora/rw-node-go
@@ -28,6 +46,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 WORKDIR /opt/rw-node
 
 COPY --from=caddy-builder /usr/bin/caddy /usr/local/bin/caddy
+COPY --from=geocheck /usr/local/bin/geocheck /usr/local/bin/geocheck
 
 RUN set -ex; \
     apk add --no-cache bash busybox-extras ca-certificates curl jq tar unzip; \

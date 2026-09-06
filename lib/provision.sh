@@ -9,6 +9,8 @@ _PROVISION_LIB_DIR="${_PROVISION_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 
 
 PROVISION_REPO="${PROVISION_REPO:-x-dora/rw-node-go}"
 CLOUDFLARED_REPO="${CLOUDFLARED_REPO:-cloudflare/cloudflared}"
+GEOCHECK_REPO="${GEOCHECK_REPO:-remnawave/geocheck}"
+GEOCHECK_VERSION_DEFAULT="${GEOCHECK_VERSION_DEFAULT:-0.3.0}"
 
 github_api_get() {
   curl -fsSL \
@@ -125,6 +127,44 @@ ensure_caddy() {
   download_file "$url" "$CADDY_BIN_DEFAULT"
   chmod 755 "$CADDY_BIN_DEFAULT"
   CADDY_BIN="$CADDY_BIN_DEFAULT"
+}
+
+ensure_geocheck() {
+  # Best-effort: the stats/get-geocheck route degrades to error A018 when the
+  # binary is missing, so failures only warn.
+  if [[ -x "$GEOCHECK_BIN_DEFAULT" ]]; then
+    log "geocheck already installed; skipping download"
+    return 0
+  fi
+
+  local version release_json archive tmp_dir
+  version="v${GEOCHECK_VERSION_DEFAULT}"
+  if [[ "${GEOCHECK_VERSION:-}" != "" ]]; then
+    version="${GEOCHECK_VERSION}"
+    [[ "$version" == v* ]] || version="v${version}"
+  fi
+
+  release_json="$(github_api_get "https://api.github.com/repos/$GEOCHECK_REPO/releases/tags/$version")"
+  [[ -n "$release_json" ]] || fail "unable to resolve geocheck release $version"
+
+  tmp_dir="$INSTALL_DIR/tmp/geocheck"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir" "$BIN_DIR"
+
+  log "installing geocheck $version"
+  archive="$(find_release_asset_download_url "$release_json" "geocheck_linux_$(detect_arch).tar.gz")"
+  [[ -n "$archive" ]] || fail "geocheck $version does not provide a linux/$(detect_arch) archive"
+
+  download_file "$archive" "$tmp_dir/geocheck.tar.gz"
+  download_file "${archive%/*}/checksums.txt" "$tmp_dir/checksums.txt"
+  (cd "$tmp_dir" && grep "  geocheck_linux_$(detect_arch).tar.gz\$" checksums.txt | sha256sum -c -) \
+    || { rm -rf "$tmp_dir"; fail "geocheck archive checksum mismatch"; }
+
+  tar -xzf "$tmp_dir/geocheck.tar.gz" -C "$tmp_dir" geocheck
+  cp "$tmp_dir/geocheck" "$GEOCHECK_BIN_DEFAULT"
+  chmod 755 "$GEOCHECK_BIN_DEFAULT"
+  printf '%s\n' "$version" > "$GEOCHECK_VERSION_FILE"
+  rm -rf "$tmp_dir"
 }
 
 resolve_cloudflared_release_json() {

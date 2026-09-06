@@ -22,6 +22,7 @@ GITHUB_REPO="x-dora/rw-node"
 WITH_CLOUDFLARED=false
 CLOUDFLARED_TOKEN=""
 GO_VERSION=""
+GEOCHECK_INSTALLED=false
 NODE_PORT="2222"
 SECRET_KEY=""
 INTERNAL_REST_PORT="61001"
@@ -239,6 +240,8 @@ setup_provision_vars() {
     ASSET_DIR="${INSTALL_DIR}/share/xray"
     VERSION_FILE="${INSTALL_DIR}/.rw-node-go-version"
     CADDY_BIN_DEFAULT="${BIN_DIR}/caddy"
+    GEOCHECK_BIN_DEFAULT="${BIN_DIR}/geocheck"
+    GEOCHECK_VERSION_FILE="${INSTALL_DIR}/.geocheck-version"
     CLOUDFLARED_BIN_DEFAULT="${BIN_DIR}/cloudflared"
     CLOUDFLARED_VERSION_FILE="${INSTALL_DIR}/.cloudflared-version"
     mkdir -p "${BIN_DIR}" "${ASSET_DIR}" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/run" "${INSTALL_DIR}/conf"
@@ -363,6 +366,8 @@ INTERNAL_REST_PORT=${INTERNAL_REST_PORT}
 ### Runtime ###
 REQUIRE_SECRET_KEY=true
 XRAY_LOCATION_ASSET=${INSTALL_DIR}/share/xray
+# SNI_VERIFICATION=false
+${GEOCHECK_ENV_LINE}
 
 ### HTTP Front (Caddy) ###
 # HTTP_FRONT_ENABLED=true
@@ -764,11 +769,27 @@ main() {
     ensure_caddy
     print_success "Caddy L4 安装完成"
 
+    # Install geocheck for the stats/get-geocheck route (best-effort)
+    print_step "安装 geocheck..."
+    if ensure_geocheck; then
+        GEOCHECK_INSTALLED=true
+        print_success "geocheck 安装完成"
+    else
+        GEOCHECK_INSTALLED=false
+        print_warning "geocheck 安装失败；stats/get-geocheck 会降级为 A018 错误，其余功能不受影响"
+    fi
+
     # Install default camouflage page
     install_default_www
 
     # Download config files (start.sh, systemd services)
     download_configs "main"
+
+    if [[ "$GEOCHECK_INSTALLED" == "true" ]]; then
+        GEOCHECK_ENV_LINE="GEOCHECK_BINARY_PATH=${INSTALL_DIR}/bin/geocheck"
+    else
+        GEOCHECK_ENV_LINE="# GEOCHECK_BINARY_PATH="
+    fi
 
     configure_env
     install_cloudflared
