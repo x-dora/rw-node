@@ -20,7 +20,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -51,6 +50,22 @@ jobs:
           echo "version=$version_stripped" >> "$GITHUB_OUTPUT"
           echo "version_raw=$version" >> "$GITHUB_OUTPUT"
 
+      # 固定 Caddy 版本作为 build-arg:CADDY_VERSION=latest 每次解析到新 tag
+      # 会让 buildx 层缓存必然失效;固定 tag 后 gha 缓存可跨构建命中,
+      # Caddy 编译层(最耗时)整体跳过。缓存未命中时也会走 Actions 的
+      # cache mount(/go/pkg/mod、/root/.cache/go-build)复用编译产物。
+      - name: Resolve Caddy version
+        id: caddy_version
+        run: |
+          set -euo pipefail
+          caddy_version="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name')"
+          if [[ -z "$caddy_version" || "$caddy_version" == "null" ]]; then
+            echo "::warning::Unable to resolve latest Caddy version; falling back to latest"
+            caddy_version="latest"
+          fi
+          echo "caddy_version=${caddy_version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Caddy version: ${caddy_version}"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -74,21 +89,21 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            CADDY_VERSION=${{ steps.caddy_version.outputs.caddy_version }}
             RW_NODE_GO_VERSION=${{ steps.go_version.outputs.version_raw }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   summary:
     name: Build Summary
-    needs: build
     runs-on: ubuntu-latest
-
+    needs: build
     steps:
       - name: Summary
         run: |
-          echo "## Docker Images Built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Tag | Description |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|-------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:latest\` | Go Implementation PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:latest-go-paas\` | Go Implementation PaaS HTTPS Direct (alias) |" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Images Built" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tag | Description |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`ghcr.io/${{ github.repository }}:latest\` | Go Implementation PaaS HTTPS Direct |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`ghcr.io/${{ github.repository }}:latest-go-paas\` | Go Implementation PaaS HTTPS Direct (alias) |" >> "$GITHUB_STEP_SUMMARY"

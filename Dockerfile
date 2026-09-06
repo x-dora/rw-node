@@ -1,7 +1,9 @@
 # Go implementation PaaS HTTPS direct Dockerfile.
 # Downloads rw-node-go release assets and starts the Caddy Layer 4 front.
 
-FROM golang:1.25-alpine AS caddy-builder
+# Runs on the build platform and cross-compiles via GOOS/GOARCH, so the
+# Caddy build never executes under QEMU emulation.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS caddy-builder
 
 ARG CADDY_VERSION=latest
 ARG TARGETARCH
@@ -10,7 +12,11 @@ ARG TARGETOS=linux
 RUN apk add --no-cache git \
     && go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
+# GOCACHE/GOMODCACHE build-cache mounts survive layer invalidation, so the
+# Caddy build reuses compiled packages even when the layer cache is cold.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
     xcaddy build ${CADDY_VERSION} \
       --with github.com/mholt/caddy-l4 \
       --output /usr/bin/caddy
