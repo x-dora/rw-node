@@ -138,6 +138,8 @@ docker run -d \
 |--------|--------|------|
 | `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
 | `NODE_TLS_CLIENT_AUTH` | `mtls` | PaaS HTTPS 直连推荐设置为 `none`，避免 PaaS/Caddy 前置无法透传客户端证书导致 Panel 连接失败 |
+| `SNI_VERIFICATION` | `false` | Panel 派生 SNI 门控开关，开启后 node 主 API 只放行派生 SNI 的握手，详见下方「Panel SNI 验证」 |
+| `GEOCHECK_BINARY_PATH` | - | geocheck 二进制路径覆盖（默认 `/usr/local/bin/geocheck`）；裸机安装会自动写入该变量 |
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
 | `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
 | `PORT` | - | PaaS 下发的 HTTP 回源端口；Caddy 优先监听该端口 |
@@ -181,6 +183,27 @@ Inbound 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置
 
 设为 `INBOUND_WATCHER_ENABLED=false` 可完全禁用此功能。
 
+## Panel SNI 验证
+
+Remnawave Panel 与 node 会各自从节点密钥（`SECRET_KEY`）载荷独立派生一个 SNI 主机名（HKDF-SHA256，格式类似 `509d286e....77b3f673ca.com`）。Panel 不会把这个 SNI 下发给 node；双方各自计算并天然一致。在节点上设置：
+
+```text
+SNI_VERIFICATION=true
+```
+
+后，node 主 API 只接受以该派生 SNI 作为 TLS ServerName 的握手。需要搭配 `NODE_TLS_CLIENT_AUTH=none`（PaaS 前置无法透传客户端证书）。
+
+本镜像对两种流量路径的处理：
+
+- **TLS 直通（Layer 4）**：Panel 经 Caddy 前置的 TLS ClientHello 携带派生 SNI。watcher 从 internal API 读取派生 SNI（`panelSni` 字段），生成显式的 `@panel` L4 规则直通到 `NODE_PORT`；未命中时兜底 `@tls` 规则同样直通，行为一致。
+- **HTTP 回源（PaaS 终结 TLS）**：Caddy 以 `https://127.0.0.1:NODE_PORT` 回源 node API。watcher 会在 `/node/*` upstream 上设置 `tls_server_name <派生SNI>`，否则 node 开启 `SNI_VERIFICATION` 后会拒绝 Caddy 的回源握手。此时对公网而言 TLS 已被 PaaS 平台终结，SNI 门控实际承担的是 Caddy 到 node 的回源段校验，真正的公网准入由平台 HTTPS 入口负责。
+
+注意事项：
+
+- 派生 SNI 在 watcher 首轮轮询（默认 15s）后写入 Caddy 配置；Panel 在此之前连接会走兜底规则（未开启 `SNI_VERIFICATION` 时无影响）。
+- 派生 SNI 本身不是机密（无法从它反推密钥），watcher 日志会打印它。
+- 需要配套支持官方 node 3.4.1 contract 的 Panel 版本。
+
 ## xhttp / WebSocket 路径
 
 如果使用 Caddy HTTP 前置承载 xhttp/ws 流量，客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。
@@ -198,6 +221,16 @@ Inbound 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置
 1. Remnawave Panel 中节点地址是否填写 PaaS 提供的 HTTPS 域名。
 2. 节点环境变量是否设置了 `NODE_TLS_CLIENT_AUTH=none`。
 3. Panel 容器是否配置了 `NODE_OPTIONS` 预加载脚本以信任 PaaS 平台公共证书，详见上方「推荐链路」部分。
+
+开启 `SNI_VERIFICATION` 后仍无法连接时，确认 Panel 版本支持官方 node 3.4.1 contract（旧 Panel 不会以派生 SNI 连接），并等待 watcher 首轮写入 `tls_server_name` 后再重试。
+
+### `get-geocheck` 返回 A018 错误
+
+`/node/stats/get-geocheck` 依赖 geocheck 二进制（镜像内置在 `/usr/local/bin/geocheck`）。裸机安装时 `ensure_geocheck` 失败会打印告警，可通过 `GEOCHECK_BINARY_PATH` 手动指定已放置的二进制路径。
+
+### geodata 资产下载
+
+rw-node-go 1.3.0+ 会在 Panel 触发 xray start 时按 Panel 下发的 `xrayConfig.geodata.assets` 下载 geodata 资产到 `XRAY_LOCATION_ASSET`（镜像内为 `/usr/local/share/xray`），需要节点具备出站 HTTPS 访问。单资产 15s 超时、失败不阻断启动（落空 stub 文件）。PaaS 无持久化卷时容器重启会重新下载。`geodata.core`（替换 xray 二进制）不被支持，会记录告警并忽略。
 
 ### `application entrypoint is missing`
 

@@ -64,10 +64,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 |------|------|------|
 | rw-node-go | `bin/rw-node-go` | Go 实现主程序 |
 | Caddy (L4) | `bin/caddy` | 带 Layer 4 插件的 Caddy，支持 TLS/HTTP 复用 |
+| geocheck | `bin/geocheck` | `stats/get-geocheck` 路由依赖的报告二进制（best-effort，失败仅告警） |
 | Xray geodata | `share/xray/geoip.dat`, `geosite.dat` | Xray 路由规则数据 |
 | 共享库 | `lib/` | core.sh, caddy.sh, provision.sh 等共享脚本 |
 | 默认伪装页面 | `default-www/` | mikutap 静态页面（Caddy HTTP 前置使用） |
 | cloudflared | `bin/cloudflared` | Cloudflare Tunnel（可选） |
+
+geocheck 安装成功时，安装器会在 `.env` 中写入 `GEOCHECK_BINARY_PATH` 指向 `bin/geocheck`。
 
 ## 管理命令
 
@@ -146,6 +149,8 @@ HTTP_FRONT_ENABLED=true
 | `SECRET_KEY` | Remnawave Panel 中的节点密钥 | - |
 | `INTERNAL_REST_PORT` | 本机 Internal REST 端口，不要公开 | `61001` |
 | `NODE_TLS_CLIENT_AUTH` | TLS 客户端证书策略 | `mtls` |
+| `SNI_VERIFICATION` | Panel 派生 SNI 门控开关（详见 PaaS 文档「Panel SNI 验证」） | `false` |
+| `GEOCHECK_BINARY_PATH` | geocheck 二进制路径覆盖（安装器自动写入） | - |
 | `RW_NODE_DIR` | 工作目录 | `/opt/rw-node` |
 | `XRAY_LOCATION_ASSET` | Xray 资源文件目录 | `${RW_NODE_DIR}/share/xray` |
 | `HTTP_FRONT_ENABLED` | 是否启用 Caddy HTTP 前置 | `false` |

@@ -104,6 +104,8 @@ shellcheck lib/*.sh config/start.sh docker-entrypoint.sh scripts/*.sh
 PaaS 版额外变量：
 
 - `NODE_TLS_CLIENT_AUTH` — PaaS HTTPS 直连推荐 `none`
+- `SNI_VERIFICATION` — Panel 派生 SNI 门控开关（默认 `false`，对齐官方 node 3.4.1）；开启后 watcher 自动注入 `@panel` L4 规则与 `/node/*` upstream 的 `tls_server_name`
+- `GEOCHECK_BINARY_PATH` — geocheck 二进制路径覆盖（默认 `/usr/local/bin/geocheck`，裸机安装自动设置）
 - `PORT` — PaaS 下发的 HTTP 回源端口；Caddy HTTP 前置优先监听该端口
 - `HTTP_FRONT_ENABLED` — 是否启动 Caddy HTTP 前置（Docker 默认 `true`，裸机默认 `false`）
 - `HTTP_FRONT_PORT` — Caddy HTTP 前置监听端口（默认 `${PORT:-3000}`）
@@ -120,6 +122,7 @@ PaaS 版额外变量：
 - `INTERNAL_REST_PORT` 是内部端口，不应通过 Docker、防火墙或 PaaS 入站公开
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录
 - `caddy.sh` 的 `reset_directory()` 有安全目录白名单，防止误删系统目录
+- `/node/stats/get-geocheck` 依赖 geocheck 二进制（镜像内置 `/usr/local/bin/geocheck`；裸机由 `ensure_geocheck` 安装并经 `GEOCHECK_BINARY_PATH` 指定），缺失时稳定降级为 A018 错误
 
 ## 提交规范
 
