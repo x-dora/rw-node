@@ -176,8 +176,7 @@ Caddy layer4 按连接首字节区分协议（三者互斥）：`0x16` 走 TLS �
 以下任一条不满足时入口自动关闭并输出 `WARN`，不影响节点其它功能：
 
 - `SSH_AUTHORIZED_KEYS` 为空
-- `sshd-lite` 下载失败
-- 当前 Caddy 二进制不含 `layer4.matchers.ssh`（复用旧版 `.rw-node/bin/caddy` 时可能出现）
+- `sshd-lite` 下载失败或启动失败
 
 host key 存放在 `.rw-node/ssh/host_key`，首次启动自动生成。容器重建会重新生成，客户端会提示 host key 变化；设置 `SSH_HOST_KEY` 可固定。
 
