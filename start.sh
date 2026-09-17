@@ -23,6 +23,8 @@ VERSION_FILE="$INSTALL_DIR/.rw-node-go-version"
 CLOUDFLARED_VERSION_FILE="$INSTALL_DIR/.cloudflared-version"
 GEOCHECK_BIN_DEFAULT="$BIN_DIR/geocheck"
 GEOCHECK_VERSION_FILE="$INSTALL_DIR/.geocheck-version"
+SSHD_LITE_BIN_DEFAULT="$BIN_DIR/sshd-lite"
+SSH_DIR="$INSTALL_DIR/ssh"
 LIB_DIR="$INSTALL_DIR/lib"
 
 LIB_REPO="${LIB_REPO:-x-dora/rw-node}"
@@ -99,6 +101,7 @@ app_pid=""
 cloudflared_pid=""
 cloudflared_mode=""
 watcher_pid=""
+ssh_service_pid=""
 shutting_down=0
 
 CADDY_HOME="$CWD"
@@ -113,7 +116,7 @@ cleanup() {
   fi
   shutting_down=1
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid"; do
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
@@ -123,7 +126,7 @@ cleanup() {
   local timer_pid=$!
   while kill -0 "$timer_pid" 2>/dev/null; do
     local all_done=1
-    for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid"; do
+    for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
       if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         all_done=0
       fi
@@ -133,13 +136,13 @@ cleanup() {
   done
   kill "$timer_pid" 2>/dev/null || true
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid"; do
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -KILL "$pid" 2>/dev/null || true
     fi
   done
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid"; do
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
     [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
   done
   exit "$code"
@@ -185,6 +188,19 @@ main() {
   ensure_rw_node_go
   install_geocheck
 
+  if [[ "${SSH_ENABLED:-false}" == "true" ]]; then
+    # Best-effort: 拿不到 sshd-lite 只是没有 SSH 入口，不应阻塞节点启动。
+    # ensure_sshd_lite 失败时会调用 fail() 退出，因此放进子 shell 收敛退出码；
+    # 子 shell 内的变量赋值不会回传，二进制路径统一在这里补齐。
+    if (ensure_sshd_lite); then
+      SSHD_LITE_BIN="${SSHD_LITE_BIN:-$SSHD_LITE_BIN_DEFAULT}"
+      export SSHD_LITE_BIN
+      log "sshd-lite ready at $SSHD_LITE_BIN"
+    else
+      log "WARN: sshd-lite install failed; SSH entry stays disabled"
+    fi
+  fi
+
   if cloudflare_tunnel_enabled; then
     ensure_cloudflared
     CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$CLOUDFLARED_BIN_DEFAULT}"
@@ -193,6 +209,7 @@ main() {
   CADDY_SKIP_PORT_WAIT=1
   mkdir -p "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
   rm -f "$CADDY_HTTP_SOCK" "$CADDY_ADMIN_SOCK"
+  start_ssh_service
   start_caddy_front
 
   trap handle_signal INT TERM

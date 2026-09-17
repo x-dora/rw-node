@@ -68,8 +68,10 @@ KEY='value'
   bin/cloudflared
   bin/geocheck
   bin/rw-node-go
+  bin/sshd-lite
   share/xray/geoip.dat
   share/xray/geosite.dat
+  ssh/host_key
   .cloudflared-version
   .geocheck-version
   .rw-node-go-version
@@ -159,6 +161,28 @@ layer4 {
 - **端口转发容器**：外部直接转发 TCP，TLS 客户端可直连。
 - **HTTPS 反代 PaaS**：PaaS 终止 TLS 后发送 HTTP，layer4 识别为非 TLS，转给内部 HTTP 路由。
 
+## SSH 入口（可选）
+
+设置 `SSH_ENABLED=true` 并提供 `SSH_AUTHORIZED_KEYS` 后，启动入口会把静态编译的 `sshd-lite` 安装到 `.rw-node/bin/`，并在 `HTTP_FRONT_PORT` 上复用 SSH，客户端直接 `ssh -p <HTTP_FRONT_PORT> <user>@<host>` 即可登录，无需额外代理配置。
+
+Caddy layer4 按连接首字节区分协议（三者互斥）：`0x16` 走 TLS 透传，`SSH-` 转发到 `127.0.0.1:${SSH_PORT}`，其余按明文 HTTP 走路径路由。sshd-lite 只监听回环地址，不接受外部直连，必须经 Caddy 入口。
+
+**登录用户名随意填写。** [sshd-lite](https://github.com/x-dora/sshd-lite) 不做用户名校验，`ssh root@…`、`ssh user@…`、`ssh 999@…` 完全等价：它认证只看 `authorized_keys`，登录成功后直接以当前进程身份启动 shell。
+
+这正是它相对 OpenSSH sshd 与 dropbear 的关键区别——后两者的每一条认证路径都要经过 `getpwnam`/`getpwuid`，容器以 `/etc/passwd` 中不存在的虚拟 uid 运行时（PaaS 平台常见，且这类环境通常不允许写 `/etc/passwd`），无论客户端填什么用户名都会认证失败。
+
+公钥认证；`-L` / `-R` / `-D` 端口转发、交互式 pty、`ssh <host> <command>`（命令交给登录 shell 的 `-c`，管道与重定向可用）均已支持。
+
+以下任一条不满足时入口自动关闭并输出 `WARN`，不影响节点其它功能：
+
+- `SSH_AUTHORIZED_KEYS` 为空
+- `sshd-lite` 下载失败
+- 当前 Caddy 二进制不含 `layer4.matchers.ssh`（复用旧版 `.rw-node/bin/caddy` 时可能出现）
+
+host key 存放在 `.rw-node/ssh/host_key`，首次启动自动生成。容器重建会重新生成，客户端会提示 host key 变化；设置 `SSH_HOST_KEY` 可固定。
+
+> SSH 是明文协议，只有 PaaS 把端口按 TCP 透传到容器时才能工作。若平台是 HTTP(S) 反代或经 cloudflared 隧道，`SSH-` 流量到不了容器。
+
 ## 环境变量
 
 启动入口会保留已有环境变量。缺失变量使用 `.env`，`.env` 也缺失时使用以下默认值：
@@ -173,6 +197,8 @@ XRAY_LOCATION_ASSET=<仓库根目录>/.rw-node/share/xray
 HTTP_FRONT_PORT=${PORT:-3000}
 XHTTP_UPSTREAM_PORT=8080
 WS_UPSTREAM_PORT=8880
+SSH_ENABLED=false
+SSH_PORT=22222
 ```
 
 可以设置 `RW_NODE_GO_VERSION` 安装指定 `x-dora/rw-node-go` release。未设置时，启动入口使用 GitHub latest release。
@@ -245,11 +271,12 @@ http://localhost:${HTTP_FRONT_PORT}
 3. 确保 Caddy 已安装。
 4. 确保 `rw-node-go` 已安装。
 5. 确保 geocheck 已安装，成功后导出 `GEOCHECK_BINARY_PATH`；失败只记录告警。
-6. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
-7. 生成 `.rw-node/conf/caddy/Caddyfile`。
-8. 使用 `caddy validate --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
-9. 使用 `caddy run --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS 和 HTTP 连接。
-10. 启动 `rw-node-go`。
-11. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
-12. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
-13. 当可选的 `cloudflared` 默认模式提前退出时，自动重试固定 Cloudflare edge 地址模式；固定 edge 地址模式仍退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
+6. 当 `SSH_ENABLED=true` 时，确保 `sshd-lite` 已安装，并在生成 Caddy 配置前启动 SSH 服务；失败只记录告警，SSH 入口降级为关闭。
+7. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
+8. 生成 `.rw-node/conf/caddy/Caddyfile`。
+9. 使用 `caddy validate --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
+10. 使用 `caddy run --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS、HTTP 和 SSH 连接。
+11. 启动 `rw-node-go`。
+12. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
+13. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
+14. 当可选的 `cloudflared` 默认模式提前退出时，自动重试固定 Cloudflare edge 地址模式；固定 edge 地址模式仍退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
