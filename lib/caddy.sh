@@ -313,6 +313,88 @@ setup_caddy_static_site() {
     publish_static_site "${staging_dir}" "${final_site_dir}"
 }
 
+# SSH 入口要求同时具备公钥（否则无人能登录）和支持 ssh matcher 的 Caddy，
+# 任一缺失都退回关闭状态，避免在单端口上生成一条永远连不通的 L4 路由。
+ssh_entry_enabled() {
+    [[ "${SSH_ENABLED:-false}" == "true" ]] || return 1
+    [[ -n "${SSH_AUTHORIZED_KEYS:-}" ]] || return 1
+    return 0
+}
+
+caddy_supports_ssh_matcher() {
+    [[ -n "${CADDY_BIN:-}" && -x "${CADDY_BIN}" ]] || return 1
+    "${CADDY_BIN}" list-modules 2>/dev/null | grep -qx 'layer4.matchers.ssh'
+}
+
+disable_ssh_entry() {
+    log "WARN: $1; SSH entry stays disabled"
+    SSH_ENABLED=false
+    export SSH_ENABLED
+}
+
+resolve_sshd_lite_bin() {
+    if [[ -n "${SSHD_LITE_BIN:-}" ]]; then
+        printf '%s' "${SSHD_LITE_BIN}"
+        return 0
+    fi
+    command -v sshd-lite 2>/dev/null || true
+}
+
+start_ssh_service() {
+    if [[ "${SSH_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    # 以下每条降级路径都同时关闭 SSH_ENABLED：write_caddy_config 和 watcher
+    # 会继承这个变量，从而不会在 HTTP_FRONT_PORT 上留下连不通的 SSH 路由。
+    if [[ -z "${SSH_AUTHORIZED_KEYS:-}" ]]; then
+        disable_ssh_entry "SSH_ENABLED is true but SSH_AUTHORIZED_KEYS is empty"
+        return 0
+    fi
+
+    if ! caddy_supports_ssh_matcher; then
+        disable_ssh_entry "this Caddy build has no layer4 ssh matcher"
+        return 0
+    fi
+
+    local sshd_bin
+    sshd_bin="$(resolve_sshd_lite_bin)"
+    if [[ -z "${sshd_bin}" || ! -x "${sshd_bin}" ]]; then
+        disable_ssh_entry "sshd-lite not found"
+        return 0
+    fi
+
+    local ssh_dir host_key
+    ssh_dir="${SSH_DIR:-${WORK_DIR:-.}/ssh}"
+    host_key="${ssh_dir}/host_key"
+    mkdir -p "${ssh_dir}"
+    chmod 700 "${ssh_dir}"
+
+    # 容器无持久卷时 host key 每次重建都会变，客户端会报 host key 已更改；
+    # SSH_HOST_KEY 给出私钥内容即可固定下来。
+    if [[ ! -s "${host_key}" && -n "${SSH_HOST_KEY:-}" ]]; then
+        printf '%s\n' "${SSH_HOST_KEY}" > "${host_key}"
+        chmod 600 "${host_key}"
+    fi
+
+    log "Starting SSH service on 127.0.0.1:${SSH_PORT}"
+    SSH_LISTEN="127.0.0.1:${SSH_PORT}" \
+    SSH_AUTHORIZED_KEYS="${SSH_AUTHORIZED_KEYS}" \
+    SSH_HOST_KEY_FILE="${host_key}" \
+        "${sshd_bin}" &
+    ssh_service_pid=$!
+
+    sleep 0.3
+    if ! kill -0 "${ssh_service_pid}" 2>/dev/null; then
+        ssh_service_pid=""
+        disable_ssh_entry "SSH service failed to start on 127.0.0.1:${SSH_PORT}"
+        return 0
+    fi
+
+    log "SSH entry ready: port ${HTTP_FRONT_PORT} serves SSH, HTTP and TLS"
+    log "SSH login: ssh -p ${HTTP_FRONT_PORT} <any-user>@<host> (sshd-lite ignores the username)"
+}
+
 write_caddy_config() {
     local config_path="$1"
     local l4_block="${2:-}"
@@ -342,9 +424,17 @@ write_caddy_config() {
             "${panel_sni}" "${NODE_PORT}"
     fi
 
+    # SSH 分流放在最前：ssh matcher 只读首 4 字节判别 `SSH-`，代价最低，
+    # 且与 TLS(0x16)/HTTP(method) 首字节互斥，不会误伤其它协议。
+    local ssh_block=""
+    if ssh_entry_enabled; then
+        printf -v ssh_block '                @ssh ssh\n                route @ssh {\n                    proxy 127.0.0.1:%s\n                }' "${SSH_PORT}"
+    fi
+
     local content
     content="$(<"${template_path}")"
     content="${content//\$\{CADDY_ADMIN_LINE\}/${admin_line}}"
+    content="${content//\$\{SSH_ROUTE_BLOCK\}/${ssh_block}}"
     content="${content//\$\{L4_ROUTE_BLOCK\}/${l4_block}}"
     content="${content//\$\{HTTP_ROUTE_BLOCK\}/${http_block}}"
     content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"

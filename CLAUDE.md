@@ -42,10 +42,11 @@ core.sh  ← 基础（日志、.env 解析、端口校验、架构检测）
 
 ### 流量路由（PaaS 单端口复用）
 
-Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做 TLS/非 TLS 分流：
-- TLS ClientHello → TCP 直通到 `NODE_PORT`（不终止 TLS）
+Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做协议分流，靠连接首字节区分（三者互斥）：
+- TLS ClientHello（`0x16`）→ TCP 直通到 `NODE_PORT`（不终止 TLS）
+- SSH（首 4 字节 `SSH-`）→ TCP 直通到内置 sshd-lite；仅在 `SSH_ENABLED=true` 且提供公钥时注入该规则
 - REALITY SNI 匹配 → TCP 直通到 Xray 端口（watcher 动态注入）
-- 非 TLS → 直接由 HTTP handler 处理路径路由（通过 `listener_wrappers` 穿透）：
+- 其余按明文 HTTP 处理 → 直接由 HTTP handler 处理路径路由（通过 `listener_wrappers` 穿透）：
   - ws/xhttp/httpupgrade 精确路径 → 对应 inbound 端口（watcher 动态注入）
   - 兜底：`/xh-*` → `XHTTP_UPSTREAM_PORT`、`/ws-*` → `WS_UPSTREAM_PORT`
   - `/node/*`、`/vision/*` → `NODE_PORT` HTTPS API（`tls_insecure_skip_verify`）
@@ -115,6 +116,11 @@ PaaS 版额外变量：
 - `INBOUND_WATCHER_ENABLED` — Inbound 动态分流开关（默认 `true`）
 - `INBOUND_WATCHER_INTERVAL` — watcher 轮询间隔秒数（默认 `15`）
 - `ARGO_TOKEN` — Cloudflare Tunnel Token（设置后启用 cloudflared）
+- `SSH_ENABLED` — 在 `HTTP_FRONT_PORT` 上复用 SSH 入口（默认 `false`）；需同时提供 `SSH_AUTHORIZED_KEYS`
+- `SSH_PORT` — 内置 sshd-lite 的本地监听端口（默认 `22222`，只绑 `127.0.0.1`）
+- `SSH_AUTHORIZED_KEYS` — 登录公钥，支持 `SSH_AUTHORIZED_KEYS_1`/`_2`/`_3` 分片拼接，与 `SECRET_KEY` 同规则
+- `SSH_HOST_KEY` — 可选，固定 host key 内容，避免容器重启后客户端报 host key 变化
+- `SSHD_LITE_BIN` — 可选，指定已有 sshd-lite 二进制路径（设置后不下载）
 
 ## 注意事项
 
@@ -123,6 +129,9 @@ PaaS 版额外变量：
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录
 - `caddy.sh` 的 `reset_directory()` 有安全目录白名单，防止误删系统目录
 - `/node/stats/get-geocheck` 依赖 geocheck 二进制（镜像内置 `/usr/local/bin/geocheck`；裸机由 `ensure_geocheck` 安装并经 `GEOCHECK_BINARY_PATH` 指定），缺失时稳定降级为 A018 错误
+- SSH 入口只在 TCP 直通型 PaaS 上可用；若平台是 HTTP(S) 反代或走 cloudflared 隧道，明文 `SSH-` 流量到不了容器
+- SSH 登录用户名不参与认证：内置 sshd-lite（x-dora/sshd-lite）不查系统用户库，客户端填 `root`、`user` 或任意字符串完全等价。这一点是关键——OpenSSH sshd 与 dropbear 的每条认证路径都要经过 `getpwnam`/`getpwuid`，容器以 `/etc/passwd` 中不存在的虚拟 uid 运行时（PaaS、OpenShift 任意 uid 模式）无法登录，且 dropbear 的第三方补丁也只覆盖密码认证
+- `SSH_ENABLED` 开启后该端口等价于对外开放一个 shell，务必只使用公钥认证并妥善保管私钥
 
 ## 提交规范
 

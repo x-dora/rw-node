@@ -81,6 +81,13 @@ RUN set -ex; \
         printf '%s\n' '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome</title></head><body><main><h1>Welcome</h1><p>The service is running.</p></main></body></html>' > /opt/rw-node/default-www/index.html; \
     fi; \
     printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
+    case "${TARGETARCH}" in \
+        arm64) SSHD_LITE_ARCH="arm64" ;; \
+        *)     SSHD_LITE_ARCH="amd64" ;; \
+    esac; \
+    curl -fsSL "https://github.com/x-dora/sshd-lite/releases/latest/download/sshd-lite-linux-${SSHD_LITE_ARCH}" \
+        -o /usr/local/bin/sshd-lite; \
+    chmod 0755 /usr/local/bin/sshd-lite; \
     rm -rf /tmp/* /var/cache/apk/*
 
 COPY docker-entrypoint.sh /usr/local/bin/

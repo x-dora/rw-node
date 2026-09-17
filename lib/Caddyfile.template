@@ -20,6 +20,7 @@
         max_header_size 32KB
         listener_wrappers {
             layer4 {
+${SSH_ROUTE_BLOCK}
 ${L4_ROUTE_BLOCK}
                 @tls tls
                 route @tls {

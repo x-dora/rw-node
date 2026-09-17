@@ -122,8 +122,31 @@ resolve_secret_key() {
   export SECRET_KEY
 }
 
+# SSH 公钥可以整段放在一个变量里，也可以按序号拆分成多个分片来绕开 PaaS
+# 的环境变量长度限制，分片约定与 SECRET_KEY 保持一致。
+resolve_ssh_authorized_keys() {
+  if [[ -v SSH_AUTHORIZED_KEYS && -n "${SSH_AUTHORIZED_KEYS}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -v SSH_AUTHORIZED_KEYS_1 ]]; then
+    return 0
+  fi
+
+  SSH_AUTHORIZED_KEYS=""
+  local i=1 part_name
+  while true; do
+    part_name="SSH_AUTHORIZED_KEYS_${i}"
+    [[ -v "${part_name}" ]] || break
+    SSH_AUTHORIZED_KEYS+="${!part_name}"
+    i=$((i + 1))
+  done
+  export SSH_AUTHORIZED_KEYS
+}
+
 set_default_env() {
   resolve_secret_key
+  resolve_ssh_authorized_keys
   [[ -v NODE_PORT ]]              || NODE_PORT=2222
   [[ -v NODE_TLS_CLIENT_AUTH ]]   || NODE_TLS_CLIENT_AUTH=mtls
   [[ -v INTERNAL_REST_PORT ]]     || INTERNAL_REST_PORT=61001
@@ -139,11 +162,15 @@ set_default_env() {
   [[ -v INBOUND_WATCHER_INTERVAL ]] || INBOUND_WATCHER_INTERVAL=15
   [[ -v ARGO_TOKEN ]]             || ARGO_TOKEN=
   [[ -v ARGO_LOG_LEVEL ]]         || ARGO_LOG_LEVEL=info
+  [[ -v SSH_ENABLED ]]            || SSH_ENABLED=false
+  [[ -v SSH_PORT ]]               || SSH_PORT=22222
+  [[ -v SSH_HOST_KEY ]]           || SSH_HOST_KEY=
 
   export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
   export RW_NODE_DIR XRAY_LOCATION_ASSET HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT
   export HTTP_FRONT_ENABLED CADDY_INDEX_PAGE INBOUND_WATCHER_ENABLED INBOUND_WATCHER_INTERVAL
   export ARGO_TOKEN ARGO_LOG_LEVEL
+  export SSH_ENABLED SSH_PORT SSH_HOST_KEY SSH_AUTHORIZED_KEYS
 }
 
 is_port() {
@@ -157,6 +184,13 @@ validate_ports() {
   done
 
   [[ "$HTTP_FRONT_PORT" != "$NODE_PORT" ]] || fail "HTTP_FRONT_PORT must differ from NODE_PORT"
+
+  if [[ "${SSH_ENABLED:-false}" == "true" ]]; then
+    is_port "${SSH_PORT}" || fail "SSH_PORT must be a valid TCP port"
+    for name in NODE_PORT HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT; do
+      [[ "${SSH_PORT}" != "${!name}" ]] || fail "SSH_PORT must differ from ${name}"
+    done
+  fi
 }
 
 wait_for_port() {

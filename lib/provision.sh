@@ -11,6 +11,7 @@ PROVISION_REPO="${PROVISION_REPO:-x-dora/rw-node-go}"
 CLOUDFLARED_REPO="${CLOUDFLARED_REPO:-cloudflare/cloudflared}"
 GEOCHECK_REPO="${GEOCHECK_REPO:-remnawave/geocheck}"
 GEOCHECK_VERSION_DEFAULT="${GEOCHECK_VERSION_DEFAULT:-0.3.0}"
+SSHD_LITE_REPO="${SSHD_LITE_REPO:-x-dora/sshd-lite}"
 
 github_api_get() {
   curl -fsSL \
@@ -211,4 +212,38 @@ ensure_cloudflared() {
   printf '%s\n' "$tag" > "$CLOUDFLARED_VERSION_FILE"
   rm -rf "$tmp_dir"
   CLOUDFLARED_BIN="$CLOUDFLARED_BIN_DEFAULT"
+}
+
+# sshd-lite 是静态 Go 二进制，Release 直接发布裸文件，因此既不需要解包工具
+# （dropbear 只发 .tar.xz，而 GNU tar 解 xz 又要外部 xz 程序，精简容器常常没有），
+# 也不依赖宿主机 libc。它认证时不查系统用户库，容器以 /etc/passwd 中不存在的
+# 虚拟 uid 运行时同样能登录。
+ensure_sshd_lite() {
+  if [[ -n "${SSHD_LITE_BIN:-}" && -x "${SSHD_LITE_BIN}" ]]; then
+    log "sshd-lite already available at ${SSHD_LITE_BIN}; skipping download"
+    return 0
+  fi
+
+  local target="${SSHD_LITE_BIN_DEFAULT:-${BIN_DIR:-}/sshd-lite}"
+
+  if [[ -x "$target" ]]; then
+    log "sshd-lite already installed; skipping download"
+    SSHD_LITE_BIN="$target"
+    export SSHD_LITE_BIN
+    return 0
+  fi
+
+  local arch url tmp_file
+  arch="$(detect_arch)"
+  url="https://github.com/$SSHD_LITE_REPO/releases/latest/download/sshd-lite-linux-${arch}"
+  tmp_file="${INSTALL_DIR:-.}/tmp/sshd-lite"
+
+  log "installing sshd-lite (linux/$arch)"
+  mkdir -p "$(dirname "$target")" "$(dirname "$tmp_file")"
+  download_file "$url" "$tmp_file"
+  chmod 755 "$tmp_file"
+  mv "$tmp_file" "$target"
+
+  SSHD_LITE_BIN="$target"
+  export SSHD_LITE_BIN
 }

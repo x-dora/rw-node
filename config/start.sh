@@ -14,6 +14,7 @@ CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
 CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-${WORK_DIR}/default-www}"
 RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-${WORK_DIR}/lib}"
 XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${WORK_DIR}/share/xray}"
+SSH_DIR="${SSH_DIR:-${WORK_DIR}/ssh}"
 LOG_PREFIX="[rw-node]"
 
 # shellcheck source=../lib/core.sh
@@ -61,11 +62,12 @@ fi
 app_pid=""
 caddy_pid=""
 watcher_pid=""
+ssh_service_pid=""
 
 terminate() {
     trap - INT TERM
     local _pid
-    for _pid in watcher_pid app_pid caddy_pid; do
+    for _pid in watcher_pid app_pid ssh_service_pid caddy_pid; do
         kill_if_running "${_pid}"
     done
     wait 2>/dev/null || true
@@ -88,6 +90,7 @@ echo "$$" > "${WORK_DIR}/run/rw-node.pid"
 
 # ── 启动 Caddy HTTP 前置（可选）─────────────────────────────
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
+    start_ssh_service
     start_caddy_front
 elif [[ "${HTTP_FRONT_ENABLED}" != "false" ]]; then
     fail "HTTP_FRONT_ENABLED must be true or false"

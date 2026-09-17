@@ -10,6 +10,7 @@ CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
 CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-/opt/rw-node/default-www}"
 CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
 CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
+SSH_DIR="${SSH_DIR:-${WORK_DIR}/ssh}"
 LOG_PREFIX="[Go PaaS]"
 
 RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-/usr/local/lib/rw-node}"
@@ -24,11 +25,12 @@ app_pid=""
 health_pid=""
 caddy_pid=""
 watcher_pid=""
+ssh_service_pid=""
 
 terminate() {
     trap - INT TERM
     local _pid
-    for _pid in watcher_pid app_pid health_pid caddy_pid; do
+    for _pid in watcher_pid app_pid health_pid ssh_service_pid caddy_pid; do
         kill_if_running "${_pid}"
     done
     wait 2>/dev/null || true
@@ -67,6 +69,7 @@ fi
 mkdir -p "${WORK_DIR}"
 rm -f "${CADDY_ADMIN_SOCK}"
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
+    start_ssh_service
     start_caddy_front
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
