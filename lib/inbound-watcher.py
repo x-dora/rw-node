@@ -176,6 +176,25 @@ def generate_http_route_block(http_routes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def generate_ssh_route_block() -> str:
+    # 与 bash 侧 write_caddy_config 保持一致：sshd-lite 不查系统用户库，客户端填什么
+    # 用户名都等价。未启用时返回空串，模板里的占位符会被替换掉，不会在单端口上留下
+    # 一条永远连不通的 L4 路由。
+    if os.environ.get("SSH_ENABLED", "false") != "true":
+        return ""
+    if not os.environ.get("SSH_AUTHORIZED_KEYS", ""):
+        return ""
+    port = os.environ.get("SSH_PORT", "22222")
+    return "\n".join(
+        [
+            "                @ssh ssh",
+            "                route @ssh {",
+            f"                    proxy 127.0.0.1:{port}",
+            "                }",
+        ]
+    )
+
+
 def generate_caddy_config(l4_block: str, http_block: str, panel_sni: str = "") -> str:
     template_path = os.path.join(os.path.dirname(__file__), "Caddyfile.template")
     with open(template_path) as f:
@@ -193,6 +212,7 @@ def generate_caddy_config(l4_block: str, http_block: str, panel_sni: str = "") -
 
     replacements = {
         "${CADDY_ADMIN_LINE}": admin_line,
+        "${SSH_ROUTE_BLOCK}": generate_ssh_route_block(),
         "${L4_ROUTE_BLOCK}": l4_block,
         "${HTTP_ROUTE_BLOCK}": http_block,
         "${HTTP_FRONT_PORT}": HTTP_FRONT_PORT,
