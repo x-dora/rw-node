@@ -771,7 +771,9 @@ main() {
 
     # Install geocheck for the stats/get-geocheck route (best-effort)
     print_step "安装 geocheck..."
-    if ensure_geocheck; then
+    # ensure_geocheck calls fail(), which exits the whole process; the subshell
+    # contains that exit so a download failure degrades to a warning.
+    if (ensure_geocheck); then
         GEOCHECK_INSTALLED=true
         print_success "geocheck 安装完成"
     else

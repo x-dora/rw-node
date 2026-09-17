@@ -137,7 +137,7 @@ ensure_geocheck() {
     return 0
   fi
 
-  local version release_json archive tmp_dir
+  local version release_json archive archive_name arch tmp_dir
   version="v${GEOCHECK_VERSION_DEFAULT}"
   if [[ "${GEOCHECK_VERSION:-}" != "" ]]; then
     version="${GEOCHECK_VERSION}"
@@ -151,16 +151,21 @@ ensure_geocheck() {
   rm -rf "$tmp_dir"
   mkdir -p "$tmp_dir" "$BIN_DIR"
 
-  log "installing geocheck $version"
-  archive="$(find_release_asset_download_url "$release_json" "geocheck_linux_$(detect_arch).tar.gz")"
-  [[ -n "$archive" ]] || fail "geocheck $version does not provide a linux/$(detect_arch) archive"
+  arch="$(detect_arch)"
+  # Keep the release asset name: `sha256sum -c` opens the file name listed in
+  # checksums.txt, so the local copy must match it.
+  archive_name="geocheck_linux_${arch}.tar.gz"
 
-  download_file "$archive" "$tmp_dir/geocheck.tar.gz"
+  log "installing geocheck $version"
+  archive="$(find_release_asset_download_url "$release_json" "$archive_name")"
+  [[ -n "$archive" ]] || fail "geocheck $version does not provide a linux/${arch} archive"
+
+  download_file "$archive" "$tmp_dir/$archive_name"
   download_file "${archive%/*}/checksums.txt" "$tmp_dir/checksums.txt"
-  (cd "$tmp_dir" && grep "  geocheck_linux_$(detect_arch).tar.gz\$" checksums.txt | sha256sum -c -) \
+  (cd "$tmp_dir" && grep "  ${archive_name}\$" checksums.txt | sha256sum -c -) \
     || { rm -rf "$tmp_dir"; fail "geocheck archive checksum mismatch"; }
 
-  tar -xzf "$tmp_dir/geocheck.tar.gz" -C "$tmp_dir" geocheck
+  tar -xzf "$tmp_dir/$archive_name" -C "$tmp_dir" geocheck
   cp "$tmp_dir/geocheck" "$GEOCHECK_BIN_DEFAULT"
   chmod 755 "$GEOCHECK_BIN_DEFAULT"
   printf '%s\n' "$version" > "$GEOCHECK_VERSION_FILE"
