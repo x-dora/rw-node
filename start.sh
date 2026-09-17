@@ -21,6 +21,8 @@ CADDY_BIN_DEFAULT="$BIN_DIR/caddy"
 CLOUDFLARED_BIN_DEFAULT="$BIN_DIR/cloudflared"
 VERSION_FILE="$INSTALL_DIR/.rw-node-go-version"
 CLOUDFLARED_VERSION_FILE="$INSTALL_DIR/.cloudflared-version"
+GEOCHECK_BIN_DEFAULT="$BIN_DIR/geocheck"
+GEOCHECK_VERSION_FILE="$INSTALL_DIR/.geocheck-version"
 LIB_DIR="$INSTALL_DIR/lib"
 
 LIB_REPO="${LIB_REPO:-x-dora/rw-node}"
@@ -147,6 +149,24 @@ handle_signal() {
   cleanup 0
 }
 
+install_geocheck() {
+  # Best-effort: /node/stats/get-geocheck degrades to error A018 without the
+  # binary, so a download failure must not abort startup. ensure_geocheck calls
+  # fail(), which exits, so it runs in a subshell to contain that exit.
+  if [[ -n "${GEOCHECK_BINARY_PATH:-}" ]]; then
+    return 0
+  fi
+
+  if (ensure_geocheck); then
+    GEOCHECK_BINARY_PATH="$GEOCHECK_BIN_DEFAULT"
+    export GEOCHECK_BINARY_PATH
+    log "geocheck ready at $GEOCHECK_BINARY_PATH"
+    return 0
+  fi
+
+  log "WARN: geocheck install failed; get-geocheck will degrade to A018"
+}
+
 main() {
   cd "$CWD"
   load_env_file
@@ -163,6 +183,8 @@ main() {
   export CADDY_BIN
 
   ensure_rw_node_go
+  install_geocheck
+
   if cloudflare_tunnel_enabled; then
     ensure_cloudflared
     CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$CLOUDFLARED_BIN_DEFAULT}"

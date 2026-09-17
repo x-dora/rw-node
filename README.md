@@ -60,16 +60,18 @@ KEY='value'
 
 ## 安装目录
 
-`rw-node-go`、Caddy 和可选的 `cloudflared` 都安装到仓库根目录下：
+`rw-node-go`、Caddy、geocheck 和可选的 `cloudflared` 都安装到仓库根目录下：
 
 ```text
 .rw-node/
   bin/caddy
   bin/cloudflared
+  bin/geocheck
   bin/rw-node-go
   share/xray/geoip.dat
   share/xray/geosite.dat
   .cloudflared-version
+  .geocheck-version
   .rw-node-go-version
   conf/caddy/Caddyfile
   caddy/data/
@@ -77,6 +79,8 @@ KEY='value'
 ```
 
 当 `rw-node-go` 二进制或必需的 Xray 资源文件缺失时，`start.sh` 会下载 `rw-node-go`。当本地 Caddy 缺失或不可执行时，`start.sh` 会下载 Caddy。
+
+当本地 geocheck 缺失时，`start.sh` 会下载 geocheck，并用指向 `.rw-node/bin/geocheck` 的 `GEOCHECK_BINARY_PATH` 启动 `rw-node-go`。这一步是 best-effort：下载失败只记录 `WARN` 告警，`start.sh` 继续启动，`/node/stats/get-geocheck` 降级为 A018 错误。
 
 当 `ARGO_TOKEN` 非空，并且本地 `cloudflared` 缺失或不可执行时，`start.sh` 会下载 `cloudflared`。
 
@@ -173,6 +177,8 @@ WS_UPSTREAM_PORT=8880
 
 可以设置 `RW_NODE_GO_VERSION` 安装指定 `x-dora/rw-node-go` release。未设置时，启动入口使用 GitHub latest release。
 
+`GEOCHECK_BINARY_PATH` 在 geocheck 安装成功后由启动入口自动设置并导出，指向 `.rw-node/bin/geocheck`；外部环境变量或 `.env` 已提供该变量时，启动入口跳过自动安装。可以设置 `GEOCHECK_VERSION` 安装指定 geocheck release（默认 `0.3.0`）。
+
 `CADDY_HTTP_PORT` 为内部自动计算的端口（`HTTP_FRONT_PORT + 1`），不需要手动设置。
 
 Cloudflare Tunnel 开关：
@@ -238,11 +244,12 @@ http://localhost:${HTTP_FRONT_PORT}
 2. 校验平台、架构和端口。
 3. 确保 Caddy 已安装。
 4. 确保 `rw-node-go` 已安装。
-5. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
-6. 生成 `.rw-node/conf/caddy/Caddyfile`。
-7. 使用 `caddy validate --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
-8. 使用 `caddy run --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS 和 HTTP 连接。
-9. 启动 `rw-node-go`。
-10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
-11. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
-12. 当可选的 `cloudflared` 默认模式提前退出时，自动重试固定 Cloudflare edge 地址模式；固定 edge 地址模式仍退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
+5. 确保 geocheck 已安装，成功后导出 `GEOCHECK_BINARY_PATH`；失败只记录告警。
+6. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
+7. 生成 `.rw-node/conf/caddy/Caddyfile`。
+8. 使用 `caddy validate --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
+9. 使用 `caddy run --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS 和 HTTP 连接。
+10. 启动 `rw-node-go`。
+11. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
+12. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
+13. 当可选的 `cloudflared` 默认模式提前退出时，自动重试固定 Cloudflare edge 地址模式；固定 edge 地址模式仍退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。
