@@ -3,7 +3,7 @@
 
 # Runs on the build platform and cross-compiles via GOOS/GOARCH, so the
 # Caddy build never executes under QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS caddy-builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS caddy-builder
 
 ARG CADDY_VERSION=latest
 ARG TARGETARCH
