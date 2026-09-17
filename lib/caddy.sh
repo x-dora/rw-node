@@ -321,11 +321,6 @@ ssh_entry_enabled() {
     return 0
 }
 
-caddy_supports_ssh_matcher() {
-    [[ -n "${CADDY_BIN:-}" && -x "${CADDY_BIN}" ]] || return 1
-    "${CADDY_BIN}" list-modules 2>/dev/null | grep -qx 'layer4.matchers.ssh'
-}
-
 disable_ssh_entry() {
     log "WARN: $1; SSH entry stays disabled"
     SSH_ENABLED=false
@@ -352,11 +347,8 @@ start_ssh_service() {
         return 0
     fi
 
-    if ! caddy_supports_ssh_matcher; then
-        disable_ssh_entry "this Caddy build has no layer4 ssh matcher"
-        return 0
-    fi
-
+    # Caddy 由 ensure_caddy 从官方 download API 固定拉取，必然带 layer4 的 ssh
+    # matcher，因此这里不做运行时探测，只在 sshd-lite 缺失或起不来时降级。
     local sshd_bin
     sshd_bin="$(resolve_sshd_lite_bin)"
     if [[ -z "${sshd_bin}" || ! -x "${sshd_bin}" ]]; then
@@ -654,10 +646,19 @@ _start_inbound_watcher_jq() {
         write_caddy_config "${config_path}" "${l4_block}" "${http_block}" "${panel_sni}"
         "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
 
-        if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
+        # reload 失败的原文必须打出来——被 2>/dev/null 吞掉时只剩一句 WARN，
+        # 无法区分是 Caddy 没起来（admin socket 不可达）还是新配置被拒。
+        local reload_output
+        if reload_output="$("${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>&1)"; then
             log "Caddy reloaded with updated inbound routing config"
         else
-            log "WARN: Caddy reload failed, will retry next cycle"
+            log "WARN: Caddy reload failed: ${reload_output}"
+            if [[ -S "${CADDY_ADMIN_SOCK}" ]]; then
+                log "WARN: admin socket ${CADDY_ADMIN_SOCK} exists; likely the new config was rejected"
+            else
+                log "WARN: admin socket ${CADDY_ADMIN_SOCK} missing; Caddy is probably not running"
+            fi
+            log "WARN: will retry next cycle"
         fi
     done
 }
