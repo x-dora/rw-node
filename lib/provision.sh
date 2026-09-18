@@ -136,10 +136,14 @@ ensure_front_proxy() {
   fi
 
   local asset version url tmp_dir stage_dir staged_bin
+  # 路径变量都给默认值：调用方（start.sh / install.sh）各自定义了一部分，
+  # 而本库跑在 set -u 下，漏定义一个就是启动直接失败。
+  local install_dir="${INSTALL_DIR:-.}"
+  local version_file="${FRONT_VERSION_FILE:-${install_dir}/.rw-node-front-version}"
   asset="$(detect_front_asset_name)"
   version="$(resolve_front_version)"
   url="https://github.com/$FRONT_REPO/releases/download/$version/$asset"
-  tmp_dir="$INSTALL_DIR/tmp/front"
+  tmp_dir="${install_dir}/tmp/front"
   stage_dir="$tmp_dir/stage"
   staged_bin="$stage_dir/rw-node-front"
 
@@ -152,7 +156,7 @@ ensure_front_proxy() {
   [[ -f "$staged_bin" ]] || fail "rw-node-front release asset is missing rw-node-front"
   cp "$staged_bin" "$target"
   chmod 755 "$target"
-  printf '%s\n' "$version" > "$FRONT_VERSION_FILE"
+  printf '%s\n' "$version" > "$version_file"
   rm -rf "$tmp_dir"
 
   FRONT_BIN="$target"

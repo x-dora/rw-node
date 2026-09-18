@@ -245,7 +245,38 @@ install_index_file() {
         return 0
     fi
 
-    cp "${file_path}" "${site_dir}/index.html"
+    # 没有 unzip 的容器很常见（PaaS 精简镜像尤其），但往往带 python3。
+    # 少了这一步，zip 会掉到下面的「单个 HTML」分支去。
+    if python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            "${file_path}" "${extract_dir}" >/dev/null 2>&1; then
+        copy_extracted_static_site "${extract_dir}" "${site_dir}"
+        return 0
+    fi
+
+    # 只有确认它真的是 HTML 才当作单页收下。否则返回失败让调用方退回内置
+    # fallback——把 zip 原样写成 index.html 会让伪装页返回二进制垃圾。
+    if looks_like_html "${file_path}"; then
+        cp "${file_path}" "${site_dir}/index.html"
+        return 0
+    fi
+
+    log "WARN: 无法解压该静态页资源，且它不像是 HTML: ${file_path}"
+    return 1
+}
+
+# looks_like_html 判断文件能否直接当页面用：先排除常见压缩包魔数，再看跳过
+# 前导空白后的首个字符是不是 '<'。只读前若干字节，大文件也不会有额外开销。
+looks_like_html() {
+    local file="$1"
+    local hex
+    hex="$(head -c 4 "${file}" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    case "${hex}" in
+        504b0304*|504b0506*|504b0708*) return 1 ;; # zip
+        1f8b*) return 1 ;;                          # gzip
+        425a68*) return 1 ;;                        # bzip2
+        fd377a*) return 1 ;;                        # xz
+    esac
+    head -c 512 "${file}" 2>/dev/null | tr -d '[:space:]' | head -c 1 | grep -q '<'
 }
 
 install_index_resource() {
