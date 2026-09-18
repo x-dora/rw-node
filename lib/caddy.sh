@@ -436,53 +436,180 @@ write_caddy_config() {
     printf '%s\n' "${content}" > "${config_path}"
 }
 
-extract_inbound_config_jq() {
-    local config_json="$1"
-
-    echo "${config_json}" | jq -r '
+# ── Inbound 动态分流 ────────────────────────────────────────────────────────
+# 三个后端（jq / Node / Python）只做一件事：把 /internal/get-config 的原始 JSON
+# 解析成下面这种 tab 分隔的路由记录写到 stdout。配置块生成、写文件、fmt 和热重载
+# 全部由 render_inbound_routing / write_caddy_config 承担，避免多份模板替换逻辑
+# 各自漂移——此前 ${SSH_ROUTE_BLOCK} 只在 bash 侧替换，Python 后端生成的 Caddyfile
+# 里留着字面占位符，就是这类漂移导致的 reload 失败。
+#
+# 记录格式（字段以 \t 分隔）：
+#   panel<TAB><sni>
+#   reality<TAB><port><TAB><sni1> <sni2> ...
+#   http<TAB><path><TAB><port><TAB><network>
+#   conflict<TAB><path><TAB><tag(port:N)>, <tag(port:N)>
+#
+# 空输出表示响应里没有可分流的 inbound（调用方退回默认兜底路由）；后端解析失败
+# 时以非零状态退出，调用方跳过本轮并保留上一份可用配置。
+parse_inbound_config_jq() {
+    jq -r '
+        def inbounds: (.inbounds // []) | if type == "array" then . else [] end;
         def normalize_path: split("?")[0] | split("#")[0] | if startswith("/") then . else "/"+. end;
-        (.inbounds // []) as $ibs |
-        {
-          panelSni: (.panelSni // "" | if type == "string" then . else "" end),
-          reality: [
-            $ibs[] |
-            select(.streamSettings.security == "reality") |
-            select(.streamSettings.realitySettings.serverNames | length > 0) |
-            { port: .port, serverNames: .streamSettings.realitySettings.serverNames }
-          ],
-          http: [
-            $ibs[] |
-            select(.streamSettings.security != "reality") |
-            select(.streamSettings.network as $n | $n == "ws" or $n == "xhttp" or $n == "httpupgrade") |
-            .streamSettings as $s |
-            (
-              if $s.network == "ws" then ($s.wsSettings.path // "")
-              elif $s.network == "xhttp" then ($s.xhttpSettings.path // "")
-              elif $s.network == "httpupgrade" then ($s.httpupgradeSettings.path // "")
-              else ""
-              end
-            ) as $path |
-            select($path != "") |
-            { path: ($path | normalize_path), port: .port, network: $s.network, tag: (.tag // "port:\(.port)") }
-          ]
-        } |
-        {
-          reality: (
-            .reality | group_by(.port) | map({
-              port: .[0].port,
-              serverNames: ([.[].serverNames[]] | unique | sort)
-            })
-          ),
-          http: .http,
-          panelSni: .panelSni
-        } |
-        {
-          reality: .reality,
-          panelSni: .panelSni,
-          http_valid: ([.http | group_by(.path)[] | select([.[].port] | unique | length == 1) | .[0]]),
-          http_conflicts: ([.http | group_by(.path)[] | select([.[].port] | unique | length > 1) | { path: .[0].path, tags: [.[] | "\(.tag)(port:\(.port))"] }])
-        }
-    ' 2>/dev/null || echo '{}'
+        def valid_port: type == "number" and . > 0 and . < 65536;
+        def http_path($s):
+          if $s.network == "ws" then ($s.wsSettings.path // "")
+          elif $s.network == "xhttp" then ($s.xhttpSettings.path // "")
+          elif $s.network == "httpupgrade" then ($s.httpupgradeSettings.path // "")
+          else "" end;
+        def http_candidates:
+          [ inbounds[] |
+            (.streamSettings // {}) as $s |
+            select($s.security != "reality") |
+            select($s.network as $n | $n == "ws" or $n == "xhttp" or $n == "httpupgrade") |
+            (http_path($s)) as $p |
+            select(($p | type) == "string" and $p != "") |
+            select(.port | valid_port) |
+            { path: ($p | normalize_path), port: .port, network: $s.network, tag: (.tag // "port:\(.port)") }
+          ];
+        def reality_records:
+          [ inbounds[] |
+            (.streamSettings // {}) as $s |
+            select($s.security == "reality") |
+            (($s.realitySettings.serverNames // []) | map(select(type == "string"))) as $names |
+            select(($names | length) > 0) |
+            select(.port | valid_port) |
+            { port: .port, serverNames: $names }
+          ] |
+          group_by(.port)[] |
+          "reality\t\(.[0].port)\t\([.[].serverNames[]] | unique | sort | join(" "))";
+        (.panelSni // "" | if type == "string" then . else "" end) as $sni |
+        (http_candidates | group_by(.path)) as $groups |
+        (if $sni == "" then empty else "panel\t\($sni)" end),
+        reality_records,
+        ([ $groups[] | select(([.[].port] | unique | length) == 1) | .[0] ] |
+          sort_by(-(.path | length), .path)[] |
+          "http\t\(.path)\t\(.port)\t\(.network)"),
+        ($groups[] | select(([.[].port] | unique | length) > 1) |
+          "conflict\t\(.[0].path)\t\([.[] | "\(.tag)(port:\(.port))"] | join(", "))")
+    ' 2>/dev/null
+}
+
+# Node / Python 后端的脚本路径；jq 后端内嵌在本文件里，没有独立脚本。
+inbound_watcher_script() {
+    case "$1" in
+        node)   printf '%s' "${_CADDY_LIB_DIR}/inbound-watcher.js" ;;
+        python) printf '%s' "${_CADDY_LIB_DIR}/inbound-watcher.py" ;;
+    esac
+}
+
+# 后端分发：stdin 收原始 JSON，stdout 出路由记录，非零退出表示解析失败。
+inbound_watcher_parse() {
+    local backend="$1"
+    local script
+    script="$(inbound_watcher_script "${backend}")"
+
+    case "${backend}" in
+        jq)     parse_inbound_config_jq ;;
+        node)   node "${script}" ;;
+        python) python3 "${script}" ;;
+        *)      return 1 ;;
+    esac
+}
+
+# 把路由记录渲染成 Caddyfile 片段并落盘。l4/http 片段为空时 write_caddy_config
+# 会退回默认的 /xh-* /ws-* 兜底路由，panel_sni 为空时不注入上游 SNI。
+render_inbound_routing() {
+    local config_path="$1"
+    local records="$2"
+
+    local -a reality_ports=() reality_snis=()
+    local -a http_paths=() http_ports=() http_networks=()
+    local -a conflict_paths=() conflict_tags=()
+    local panel_sni=""
+    local kind field1 field2 field3
+
+    # 后端已保证记录顺序确定（reality 按端口、http 按路径长度倒序），这里只做归类。
+    while IFS=$'\t' read -r kind field1 field2 field3; do
+        case "${kind}" in
+            panel)
+                panel_sni="${field1}"
+                ;;
+            reality)
+                reality_ports+=("${field1}")
+                reality_snis+=("${field2}")
+                ;;
+            http)
+                http_paths+=("${field1}")
+                http_ports+=("${field2}")
+                http_networks+=("${field3}")
+                ;;
+            conflict)
+                conflict_paths+=("${field1}")
+                conflict_tags+=("${field2}")
+                ;;
+        esac
+    done <<<"${records}"
+
+    local i
+    for i in "${!conflict_paths[@]}"; do
+        log "WARN: HTTP route conflict: path=${conflict_paths[$i]} claimed by [${conflict_tags[$i]}], skipped"
+    done
+
+    if [[ -n "${panel_sni}" ]]; then
+        log "L4 route: PANEL sni=${panel_sni} -> 127.0.0.1:${NODE_PORT}"
+    fi
+
+    for i in "${!reality_ports[@]}"; do
+        log "L4 route: REALITY snis=[${reality_snis[$i]}] -> 127.0.0.1:${reality_ports[$i]}"
+    done
+
+    for i in "${!http_paths[@]}"; do
+        log "HTTP route: ${http_paths[$i]} [${http_networks[$i]}] -> 127.0.0.1:${http_ports[$i]}"
+    done
+
+    if (( ${#http_paths[@]} == 0 )); then
+        if (( ${#reality_ports[@]} > 0 || ${#conflict_paths[@]} > 0 )); then
+            log "No HTTP path inbounds detected, using fallback wildcard routes"
+        elif [[ -n "${panel_sni}" ]]; then
+            log "Only panel SNI detected, using default HTTP routes"
+        else
+            log "No routeable inbounds detected, using default config"
+        fi
+    fi
+
+    local l4_block="" http_block="" matcher pattern
+
+    if [[ -n "${panel_sni}" ]]; then
+        printf -v l4_block '                @panel tls sni %s\n                route @panel {\n                    proxy 127.0.0.1:%s\n                }' \
+            "${panel_sni}" "${NODE_PORT}"
+    fi
+
+    # 只有一个 REALITY 端口时沿用 @reality 这个旧名字，多端口才带端口后缀。
+    for i in "${!reality_ports[@]}"; do
+        if (( ${#reality_ports[@]} == 1 )); then
+            matcher="reality"
+        else
+            matcher="reality_${reality_ports[$i]}"
+        fi
+        [[ -z "${l4_block}" ]] || l4_block+=$'\n'
+        l4_block+="                @${matcher} tls sni ${reality_snis[$i]}"$'\n'
+        l4_block+="                route @${matcher} {"$'\n'
+        l4_block+="                    proxy 127.0.0.1:${reality_ports[$i]}"$'\n'
+        l4_block+="                }"
+    done
+
+    for i in "${!http_paths[@]}"; do
+        pattern="${http_paths[$i]}"
+        [[ "${pattern}" == *'*' ]] || pattern="${pattern}*"
+        (( i == 0 )) || http_block+=$'\n'$'\n'
+        http_block+="    handle ${pattern} {"$'\n'
+        http_block+="        reverse_proxy 127.0.0.1:${http_ports[$i]} {"$'\n'
+        http_block+="            flush_interval -1"$'\n'
+        http_block+="        }"$'\n'
+        http_block+="    }"
+    done
+
+    write_caddy_config "${config_path}" "${l4_block}" "${http_block}" "${panel_sni}"
 }
 
 _detect_inbound_watcher_backend() {
@@ -506,12 +633,18 @@ _detect_inbound_watcher_backend() {
     return 1
 }
 
-_start_inbound_watcher_jq() {
+# watcher 主循环：三个后端共用这一份轮询、日志与热重载逻辑，只有解析步骤不同。
+_start_inbound_watcher() {
     local config_path="$1"
-    local interval="${INBOUND_WATCHER_INTERVAL:-15}"
+    local backend="$2"
     local internal_url="http://127.0.0.1:${INTERNAL_REST_PORT}/internal/get-config"
+    local interval="${INBOUND_WATCHER_INTERVAL:-15}"
     local prev_hash=""
+    local first_run=1
 
+    [[ "${interval}" =~ ^[0-9]+$ ]] || interval=15
+
+    # 等 rw-node-go 的内部 API 就绪；超时也继续，后续轮询会自然重试。
     for _ in $(seq 1 120); do
         if (echo >"/dev/tcp/127.0.0.1/${INTERNAL_REST_PORT}") >/dev/null 2>&1; then
             break
@@ -519,7 +652,6 @@ _start_inbound_watcher_jq() {
         sleep 1
     done
 
-    local first_run=1
     while true; do
         if (( first_run )); then
             first_run=0
@@ -529,121 +661,22 @@ _start_inbound_watcher_jq() {
 
         local config_json
         config_json="$(curl -sS --max-time 5 "${internal_url}" 2>/dev/null || true)"
-        if [[ -z "${config_json}" ]]; then
-            continue
-        fi
+        [[ -n "${config_json}" ]] || continue
 
-        local parsed
-        parsed="$(extract_inbound_config_jq "${config_json}")"
-        if [[ -z "${parsed}" ]]; then
-            continue
-        fi
-
-        local panel_sni
-        panel_sni="$(echo "${parsed}" | jq -r '.panelSni // ""')"
-        local reality_count
-        reality_count="$(echo "${parsed}" | jq '.reality | length')"
-        local http_valid_count
-        http_valid_count="$(echo "${parsed}" | jq '.http_valid | length')"
-        if (( reality_count == 0 && http_valid_count == 0 )) && [[ -z "${panel_sni}" ]] && [[ "${config_json}" == "{}" ]]; then
+        # 后端解析失败时保持上一份可用配置，不做任何写入。
+        local records
+        if ! records="$(printf '%s' "${config_json}" | inbound_watcher_parse "${backend}")"; then
+            log "WARN: ${backend} backend failed to parse inbound config; keeping current routing"
             continue
         fi
 
         local current_hash
-        current_hash="$(printf '%s' "${parsed}" | md5sum | cut -d' ' -f1)"
-
+        current_hash="$(printf '%s' "${records}" | md5sum | cut -d' ' -f1)"
         if [[ "${current_hash}" == "${prev_hash}" ]]; then
             continue
         fi
 
-        prev_hash="${current_hash}"
-
-        local l4_block=""
-        local http_block=""
-
-        if [[ -n "${panel_sni}" ]]; then
-            l4_block+="                @panel tls sni ${panel_sni}"$'\n'
-            l4_block+="                route @panel {"$'\n'
-            l4_block+="                    proxy 127.0.0.1:${NODE_PORT}"$'\n'
-            l4_block+="                }"
-            if (( reality_count > 0 )); then
-                l4_block+=$'\n'
-            fi
-            log "L4 route: PANEL sni=${panel_sni} -> 127.0.0.1:${NODE_PORT}"
-        fi
-
-        if (( reality_count > 0 )); then
-            local i
-            for (( i=0; i<reality_count; i++ )); do
-                local port snis matcher_name
-                port="$(echo "${parsed}" | jq -r ".reality[$i].port")"
-                snis="$(echo "${parsed}" | jq -r ".reality[$i].serverNames | join(\" \")")"
-                if (( reality_count == 1 )); then
-                    matcher_name="reality"
-                else
-                    matcher_name="reality_${port}"
-                fi
-                l4_block+="                @${matcher_name} tls sni ${snis}"$'\n'
-                l4_block+="                route @${matcher_name} {"$'\n'
-                l4_block+="                    proxy 127.0.0.1:${port}"$'\n'
-                l4_block+="                }"
-                if (( i < reality_count - 1 )); then
-                    l4_block+=$'\n'
-                fi
-                log "L4 route: REALITY snis=[${snis}] -> 127.0.0.1:${port}"
-            done
-        fi
-
-        local conflict_count
-        conflict_count="$(echo "${parsed}" | jq '.http_conflicts | length')"
-        if (( conflict_count > 0 )); then
-            local i
-            for (( i=0; i<conflict_count; i++ )); do
-                local cpath ctags
-                cpath="$(echo "${parsed}" | jq -r ".http_conflicts[$i].path")"
-                ctags="$(echo "${parsed}" | jq -r ".http_conflicts[$i].tags | join(\", \")")"
-                log "WARN: HTTP route conflict: path=${cpath} claimed by [${ctags}], skipped"
-            done
-        fi
-
-        local http_count
-        http_count="$(echo "${parsed}" | jq '.http_valid | length')"
-        if (( http_count > 0 )); then
-            local i
-            for (( i=0; i<http_count; i++ )); do
-                local rpath rport rnetwork path_pattern
-                rpath="$(echo "${parsed}" | jq -r ".http_valid[$i].path")"
-                rport="$(echo "${parsed}" | jq -r ".http_valid[$i].port")"
-                rnetwork="$(echo "${parsed}" | jq -r ".http_valid[$i].network")"
-                if [[ "${rpath}" == *'*' ]]; then
-                    path_pattern="${rpath}"
-                else
-                    path_pattern="${rpath}*"
-                fi
-                http_block+="    handle ${path_pattern} {"$'\n'
-                http_block+="        reverse_proxy 127.0.0.1:${rport} {"$'\n'
-                http_block+="            flush_interval -1"$'\n'
-                http_block+="        }"$'\n'
-                http_block+="    }"
-                if (( i < http_count - 1 )); then
-                    http_block+=$'\n'$'\n'
-                fi
-                log "HTTP route: ${rpath} [${rnetwork}] -> 127.0.0.1:${rport}"
-            done
-        else
-            if (( reality_count > 0 || conflict_count > 0 )); then
-                log "No HTTP path inbounds detected, using fallback wildcard routes"
-            fi
-            if (( reality_count == 0 && http_count == 0 && conflict_count == 0 )); then
-                if [[ -z "${panel_sni}" ]]; then
-                    log "No routeable inbounds detected, using default config"
-                else
-                    log "Only panel SNI detected, using default HTTP routes"
-                fi
-            fi
-        fi
-
-        write_caddy_config "${config_path}" "${l4_block}" "${http_block}" "${panel_sni}"
+        render_inbound_routing "${config_path}" "${records}"
         "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
 
         # reload 失败的原文必须打出来——被 2>/dev/null 吞掉时只剩一句 WARN，
@@ -651,15 +684,18 @@ _start_inbound_watcher_jq() {
         local reload_output
         if reload_output="$("${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>&1)"; then
             log "Caddy reloaded with updated inbound routing config"
-        else
-            log "WARN: Caddy reload failed: ${reload_output}"
-            if [[ -S "${CADDY_ADMIN_SOCK}" ]]; then
-                log "WARN: admin socket ${CADDY_ADMIN_SOCK} exists; likely the new config was rejected"
-            else
-                log "WARN: admin socket ${CADDY_ADMIN_SOCK} missing; Caddy is probably not running"
-            fi
-            log "WARN: will retry next cycle"
+            prev_hash="${current_hash}"
+            continue
         fi
+
+        # 只有重载成功才推进 prev_hash，下一轮会用同一份配置重试。
+        log "WARN: Caddy reload failed: ${reload_output}"
+        if [[ -S "${CADDY_ADMIN_SOCK}" ]]; then
+            log "WARN: admin socket ${CADDY_ADMIN_SOCK} exists; likely the new config was rejected"
+        else
+            log "WARN: admin socket ${CADDY_ADMIN_SOCK} missing; Caddy is probably not running"
+        fi
+        log "WARN: will retry next cycle"
     done
 }
 
@@ -674,30 +710,15 @@ start_inbound_watcher() {
 
     export CADDY_ADMIN_SOCK CADDY_BIN CADDY_SITE_DIR LOG_PREFIX
 
-    case "${backend}" in
-        jq)
-            log "Inbound watcher using jq backend"
-            _start_inbound_watcher_jq "${config_path}"
-            ;;
-        node)
-            local watcher_script="${_CADDY_LIB_DIR}/inbound-watcher.js"
-            if [[ ! -f "${watcher_script}" ]]; then
-                log "WARN: Inbound watcher script not found: ${watcher_script}"
-                return 0
-            fi
-            log "Inbound watcher using Node.js backend"
-            node "${watcher_script}" "${config_path}"
-            ;;
-        python)
-            local watcher_script="${_CADDY_LIB_DIR}/inbound-watcher.py"
-            if [[ ! -f "${watcher_script}" ]]; then
-                log "WARN: Inbound watcher script not found: ${watcher_script}"
-                return 0
-            fi
-            log "Inbound watcher using Python backend"
-            python3 "${watcher_script}" "${config_path}"
-            ;;
-    esac
+    local watcher_script
+    watcher_script="$(inbound_watcher_script "${backend}")"
+    if [[ -n "${watcher_script}" && ! -f "${watcher_script}" ]]; then
+        log "WARN: Inbound watcher script not found: ${watcher_script}"
+        return 0
+    fi
+
+    log "Inbound watcher using ${backend} backend"
+    _start_inbound_watcher "${config_path}" "${backend}"
 }
 
 start_caddy_front() {

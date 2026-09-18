@@ -34,11 +34,18 @@ core.sh  ← 基础（日志、.env 解析、端口校验、架构检测）
 
 ### Caddyfile 模板系统
 
-`lib/Caddyfile.template` 是三端（Docker entrypoint / 裸机 start.sh / inbound-watcher）共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符，由 `write_caddy_config()` (bash)、`generateCaddyConfig()` (JS/Python) 做字符串替换生成最终 Caddyfile。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。L4 处理通过 HTTP server 的 `listener_wrappers` 内嵌，而非独立 app，避免 Caddy app 启动顺序竞态。
+`lib/Caddyfile.template` 是 Docker entrypoint / 裸机 start.sh / inbound-watcher 共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符。**占位符替换只有一处实现**：bash 的 `write_caddy_config()`。新增占位符只需改模板和这一个函数，任何其它语言都不再复制模板替换逻辑。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。L4 处理通过 HTTP server 的 `listener_wrappers` 内嵌，而非独立 app，避免 Caddy app 启动顺序竞态。
 
 ### Inbound 动态分流
 
-后台 watcher 轮询 rw-node-go 内部 API（`/internal/get-config`），提取所有可分流的 inbound 配置，自动生成 Caddy 分流规则并热重载。支持 REALITY SNI 分流（L4 层）和 ws/xhttp/httpupgrade 路径分流（HTTP 层），含冲突检测和兜底路由。三种后端按优先级自动选择：jq（内嵌在 `caddy.sh`） > Node.js（`inbound-watcher.js`） > Python（`inbound-watcher.py`）。
+后台 watcher 轮询 rw-node-go 内部 API（`/internal/get-config`），提取所有可分流的 inbound 配置，自动生成 Caddy 分流规则并热重载。支持 REALITY SNI 分流（L4 层）和 ws/xhttp/httpupgrade 路径分流（HTTP 层），含冲突检测和兜底路由。
+
+职责严格分离：
+
+- **轮询、查重、配置生成、写文件、热重载**全部在 `lib/caddy.sh`（`_start_inbound_watcher` + `render_inbound_routing`），三个后端共用同一份。
+- **后端只做数据解析**：把 API 原始 JSON 归一化成 tab 分隔的路由记录写到 stdout，不碰 Caddyfile。三种后端按优先级自动选择：jq（`parse_inbound_config_jq`，内嵌在 `caddy.sh`） > Node.js（`inbound-watcher.js`） > Python（`inbound-watcher.py`）。
+
+记录协议（`panel` / `reality` / `http` / `conflict` 四类，字段以 tab 分隔）之所以不是 JSON，是因为跑 Node/Python 后端的机器不一定有 jq，bash 需要零依赖就能读。三个后端的输出必须**逐字节一致**，改动任一后端后要交叉比对。
 
 ### 流量路由（PaaS 单端口复用）
 
@@ -59,11 +66,11 @@ Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做协议分流，靠连接首字节区�
 - `Dockerfile` — Go 实现 PaaS HTTPS 直连镜像
 - `docker-entrypoint.sh` — PaaS 入口脚本，启动 Caddy L4 前置 + rw-node-go + inbound watcher
 - `lib/core.sh` — 核心工具库
-- `lib/caddy.sh` — Caddy 管理（含 jq 版 inbound watcher）
-- `lib/Caddyfile.template` — Caddy 配置模板（三端共用）
+- `lib/caddy.sh` — Caddy 管理（含 jq 版 inbound watcher、路由渲染、模板替换）
+- `lib/Caddyfile.template` — Caddy 配置模板（占位符只由 `write_caddy_config()` 替换）
 - `lib/provision.sh` — 组件下载安装库
 - `lib/cloudflared.sh` — Cloudflare Tunnel 管理
-- `lib/inbound-watcher.js` / `lib/inbound-watcher.py` — Inbound watcher 的 Node.js/Python 后端
+- `lib/inbound-watcher.js` / `lib/inbound-watcher.py` — Inbound watcher 的 Node.js/Python 后端，只做 JSON→路由记录解析
 - `config/start.sh` — 裸机启动脚本（source lib/ 共享库）
 - `config/systemd/rw-node.service` — systemd 服务定义
 - `config/env.sample` — 环境变量模板

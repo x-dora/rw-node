@@ -1,366 +1,165 @@
 #!/usr/bin/env python3
-import hashlib
+"""把 rw-node-go /internal/get-config 的响应解析成路由记录。
+
+只做数据解析：不生成 Caddyfile、不写文件、不重载 Caddy。配置块生成、fmt 与热重载
+统一由 lib/caddy.sh 的 render_inbound_routing / write_caddy_config 负责，避免每个
+后端各维护一份模板替换逻辑。
+
+用法：
+
+    curl -s "http://127.0.0.1:${INTERNAL_REST_PORT}/internal/get-config" \
+        | python3 inbound-watcher.py
+
+输出（字段以制表符分隔，顺序对所有后端一致）：
+
+    panel<TAB><sni>
+    reality<TAB><port><TAB><sni1> <sni2> ...
+    http<TAB><path><TAB><port><TAB><network>
+    conflict<TAB><path><TAB><tag(port:N)>, <tag(port:N)>
+
+http 记录按路径长度倒序输出，让更具体的路径先匹配。没有可分流的 inbound 时不输出
+任何内容（调用方退回默认兜底路由）；输入不是合法 JSON 时以非零状态退出，调用方跳过
+本轮并保留上一份可用配置。
+
+输出必须与 lib/inbound-watcher.js、lib/caddy.sh 的 parse_inbound_config_jq 完全一致。
+"""
+
 import json
-import os
-import socket
-import subprocess
 import sys
-import time
-import urllib.request
-import urllib.error
 
-LOG_PREFIX = os.environ.get("LOG_PREFIX", "[rw-node]")
-INTERNAL_REST_PORT = os.environ.get("INTERNAL_REST_PORT", "61001")
-CADDY_ADMIN_SOCK = os.environ.get("CADDY_ADMIN_SOCK", "/tmp/caddy-admin.sock")
-CADDY_BIN = os.environ.get("CADDY_BIN", "caddy")
-INBOUND_WATCHER_INTERVAL = int(os.environ.get("INBOUND_WATCHER_INTERVAL", "15"))
-HTTP_FRONT_PORT = os.environ.get("HTTP_FRONT_PORT", "3000")
-NODE_PORT = os.environ.get("NODE_PORT", "2222")
-XHTTP_UPSTREAM_PORT = os.environ.get("XHTTP_UPSTREAM_PORT", "8080")
-WS_UPSTREAM_PORT = os.environ.get("WS_UPSTREAM_PORT", "8880")
-CADDY_SITE_DIR = os.environ.get("CADDY_SITE_DIR", "")
+# 可被 Caddy 按路径分流的网络类型
+HTTP_NETWORKS = ("ws", "xhttp", "httpupgrade")
+
+# 各网络类型下承载路径的配置字段
+PATH_SETTINGS = {
+    "ws": "wsSettings",
+    "xhttp": "xhttpSettings",
+    "httpupgrade": "httpupgradeSettings",
+}
 
 
-def log(msg: str) -> None:
-    print(f"{LOG_PREFIX} {msg}", flush=True)
+def as_str(value) -> str:
+    return value if isinstance(value, str) else ""
 
 
-def http_get(url: str, timeout: int = 5) -> str:
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode()
+def as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
-def normalize_path(p: str) -> str:
-    if not p:
+def valid_port(value):
+    """返回可用的端口号，非数字或越界时返回 None。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 < value < 65536 else None
+
+
+def normalize_path(path) -> str:
+    path = as_str(path)
+    if not path:
         return ""
-    normalized = p.split("?")[0].split("#")[0]
+    normalized = path.split("?")[0].split("#")[0]
     if normalized and not normalized.startswith("/"):
         normalized = "/" + normalized
     return normalized
 
 
-def get_http_path(stream_settings: dict) -> str:
-    network = stream_settings.get("network", "")
-    if network == "ws":
-        return stream_settings.get("wsSettings", {}).get("path", "")
-    elif network == "xhttp":
-        return stream_settings.get("xhttpSettings", {}).get("path", "")
-    elif network == "httpupgrade":
-        return stream_settings.get("httpupgradeSettings", {}).get("path", "")
-    return ""
+def http_path(stream: dict) -> str:
+    settings = as_dict(stream.get(PATH_SETTINGS.get(stream.get("network"), "")))
+    return as_str(settings.get("path"))
 
 
-def extract_inbound_config(config: dict) -> dict:
-    inbounds = config.get("inbounds", [])
-    reality_routes: list[dict] = []
-    http_path_candidates: list[dict] = []
+def collect(config: dict) -> tuple:
+    """按 port 合并 REALITY 记录，并收集待分流的 HTTP 路径。"""
+    inbounds = config.get("inbounds")
+    if not isinstance(inbounds, list):
+        inbounds = []
 
-    for ib in inbounds:
-        stream = ib.get("streamSettings")
+    reality_by_port: dict = {}
+    http_candidates: list = []
+
+    for inbound in inbounds:
+        inbound = as_dict(inbound)
+        stream = as_dict(inbound.get("streamSettings"))
         if not stream:
             continue
 
         if stream.get("security") == "reality":
-            names = stream.get("realitySettings", {}).get("serverNames", [])
-            port = ib.get("port")
-            if names and port:
-                reality_routes.append({"port": port, "serverNames": names})
+            port = valid_port(inbound.get("port"))
+            names = as_dict(stream.get("realitySettings")).get("serverNames")
+            if port and isinstance(names, list):
+                keys = [n for n in names if isinstance(n, str)]
+                if keys:
+                    reality_by_port.setdefault(port, set()).update(keys)
             continue
 
-        network = stream.get("network", "")
-        if network in ("ws", "xhttp", "httpupgrade"):
-            raw_path = get_http_path(stream)
-            normalized = normalize_path(raw_path)
-            if normalized:
-                http_path_candidates.append({
-                    "path": normalized,
-                    "port": ib.get("port"),
-                    "network": network,
-                    "tag": ib.get("tag", f"port:{ib.get('port')}"),
-                })
+        if stream.get("network") not in HTTP_NETWORKS:
+            continue
 
-    merged_reality = merge_reality_routes(reality_routes)
-    http_routes, conflicts = resolve_http_routes(http_path_candidates)
-    panel_sni = config.get("panelSni")
-    if not isinstance(panel_sni, str):
-        panel_sni = ""
+        path = normalize_path(http_path(stream))
+        port = valid_port(inbound.get("port"))
+        if not path or not port:
+            continue
 
-    return {
-        "realityRoutes": merged_reality,
-        "httpRoutes": http_routes,
-        "conflicts": conflicts,
-        "panelSni": panel_sni,
-    }
+        http_candidates.append({
+            "path": path,
+            "port": port,
+            "network": stream.get("network"),
+            "tag": as_str(inbound.get("tag")) or "port:%d" % port,
+        })
+
+    return reality_by_port, http_candidates
 
 
-def merge_reality_routes(routes: list[dict]) -> list[dict]:
-    by_port: dict[int, set] = {}
-    for r in routes:
-        existing = by_port.setdefault(r["port"], set())
-        existing.update(r["serverNames"])
-    return [
-        {"port": port, "serverNames": sorted(names)}
-        for port, names in sorted(by_port.items())
-    ]
+def render(config: dict) -> list:
+    panel_sni = as_str(config.get("panelSni"))
+    reality_by_port, http_candidates = collect(config)
 
+    by_path: dict = {}
+    for candidate in http_candidates:
+        by_path.setdefault(candidate["path"], []).append(candidate)
 
-def resolve_http_routes(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
-    by_path: dict[str, list[dict]] = {}
-    for c in candidates:
-        by_path.setdefault(c["path"], []).append(c)
+    # 同一路径只能归属于一个端口，否则该路径无法确定转发目标，只报冲突不生成路由。
+    http_routes = sorted(
+        (entries[0] for entries in by_path.values()
+         if len({e["port"] for e in entries}) == 1),
+        key=lambda r: (-len(r["path"]), r["path"]),
+    )
 
-    routes = []
-    conflicts = []
-
-    for p, entries in by_path.items():
-        ports = set(e["port"] for e in entries)
-        if len(ports) == 1:
-            routes.append(entries[0])
-        else:
-            conflicts.append({
-                "path": p,
-                "tags": [f"{e['tag']}(port:{e['port']})" for e in entries],
-            })
-
-    routes.sort(key=lambda r: -len(r["path"]))
-    return routes, conflicts
-
-
-def generate_l4_route_block(reality_routes: list[dict], panel_sni: str = "") -> str:
-    lines = []
+    records = []
     if panel_sni:
-        lines.append(f"                @panel tls sni {panel_sni}")
-        lines.append(f"                route @panel {{")
-        lines.append(f"                    proxy 127.0.0.1:{NODE_PORT}")
-        lines.append(f"                }}")
-    if not reality_routes:
-        return "\n".join(lines)
-    for r in reality_routes:
-        snis = " ".join(r["serverNames"])
-        matcher = "reality" if len(reality_routes) == 1 else f"reality_{r['port']}"
-        lines.append(f"                @{matcher} tls sni {snis}")
-        lines.append(f"                route @{matcher} {{")
-        lines.append(f"                    proxy 127.0.0.1:{r['port']}")
-        lines.append(f"                }}")
-    return "\n".join(lines)
+        records.append("panel\t%s" % panel_sni)
+
+    for port in sorted(reality_by_port):
+        records.append(
+            "reality\t%d\t%s" % (port, " ".join(sorted(reality_by_port[port])))
+        )
+
+    for route in http_routes:
+        records.append(
+            "http\t%s\t%d\t%s" % (route["path"], route["port"], route["network"])
+        )
+
+    for path in sorted(by_path):
+        entries = by_path[path]
+        if len({e["port"] for e in entries}) > 1:
+            tags = ", ".join("%s(port:%d)" % (e["tag"], e["port"]) for e in entries)
+            records.append("conflict\t%s\t%s" % (path, tags))
+
+    return records
 
 
-def generate_http_route_block(http_routes: list[dict]) -> str:
-    if not http_routes:
-        lines = [
-            f"    handle /xh-* {{",
-            f"        reverse_proxy 127.0.0.1:{XHTTP_UPSTREAM_PORT} {{",
-            f"            flush_interval -1",
-            f"        }}",
-            f"    }}",
-            f"",
-            f"    handle /ws-* {{",
-            f"        reverse_proxy 127.0.0.1:{WS_UPSTREAM_PORT} {{",
-            f"            flush_interval -1",
-            f"        }}",
-            f"    }}",
-        ]
-        return "\n".join(lines)
-
-    lines = []
-    for i, r in enumerate(http_routes):
-        path_pattern = r["path"] if r["path"].endswith("*") else f"{r['path']}*"
-        lines.append(f"    handle {path_pattern} {{")
-        lines.append(f"        reverse_proxy 127.0.0.1:{r['port']} {{")
-        lines.append(f"            flush_interval -1")
-        lines.append(f"        }}")
-        lines.append(f"    }}")
-        if i < len(http_routes) - 1:
-            lines.append("")
-    return "\n".join(lines)
-
-
-def generate_ssh_route_block() -> str:
-    # 与 bash 侧 write_caddy_config 保持一致：sshd-lite 不查系统用户库，客户端填什么
-    # 用户名都等价。未启用时返回空串，模板里的占位符会被替换掉，不会在单端口上留下
-    # 一条永远连不通的 L4 路由。
-    if os.environ.get("SSH_ENABLED", "false") != "true":
-        return ""
-    if not os.environ.get("SSH_AUTHORIZED_KEYS", ""):
-        return ""
-    port = os.environ.get("SSH_PORT", "22222")
-    return "\n".join(
-        [
-            "                @ssh ssh",
-            "                route @ssh {",
-            f"                    proxy 127.0.0.1:{port}",
-            "                }",
-        ]
-    )
-
-
-def generate_caddy_config(l4_block: str, http_block: str, panel_sni: str = "") -> str:
-    template_path = os.path.join(os.path.dirname(__file__), "Caddyfile.template")
-    with open(template_path) as f:
-        content = f.read()
-
-    admin_line = (
-        f"admin unix/{CADDY_ADMIN_SOCK}"
-        if os.environ.get("INBOUND_WATCHER_ENABLED", "true") != "false"
-        else "admin off"
-    )
-
-    # Upstream SNI for the node API when SNI_VERIFICATION is enabled on the
-    # node; the derived hostname is public tooling metadata, not a secret.
-    tls_server_name_line = f"                tls_server_name {panel_sni}" if panel_sni else ""
-
-    replacements = {
-        "${CADDY_ADMIN_LINE}": admin_line,
-        "${SSH_ROUTE_BLOCK}": generate_ssh_route_block(),
-        "${L4_ROUTE_BLOCK}": l4_block,
-        "${HTTP_ROUTE_BLOCK}": http_block,
-        "${HTTP_FRONT_PORT}": HTTP_FRONT_PORT,
-        "${NODE_PORT}": NODE_PORT,
-        "${NODE_TLS_SERVER_NAME}": tls_server_name_line,
-        "${CADDY_SITE_DIR}": CADDY_SITE_DIR,
-    }
-    for placeholder, value in replacements.items():
-        content = content.replace(placeholder, value)
-
-    return content
-
-
-def hash_string(s: str) -> str:
-    return hashlib.md5(s.encode()).hexdigest()
-
-
-def caddy_fmt(config_path: str) -> None:
+def main() -> int:
     try:
-        subprocess.run(
-            [CADDY_BIN, "fmt", "--overwrite", config_path],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+        config = json.loads(sys.stdin.read())
+    except (ValueError, TypeError):
+        return 1
 
+    if not isinstance(config, dict):
+        return 1
 
-def caddy_reload(config_path: str) -> bool:
-    try:
-        subprocess.run(
-            [
-                CADDY_BIN,
-                "reload",
-                "--config",
-                config_path,
-                "--adapter",
-                "caddyfile",
-                "--address",
-                f"unix/{CADDY_ADMIN_SOCK}",
-            ],
-            capture_output=True,
-            timeout=10,
-            check=True,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-def wait_for_port(port: int, max_wait: int = 120) -> None:
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return
-        except OSError:
-            time.sleep(1)
-
-
-def main(config_path=None) -> int:
-    if config_path is None:
-        if len(sys.argv) < 2:
-            print(
-                f"{LOG_PREFIX} ERROR: inbound-watcher.py requires config_path argument",
-                file=sys.stderr,
-            )
-            return 1
-        config_path = sys.argv[1]
-    wait_for_port(int(INTERNAL_REST_PORT))
-
-    prev_hash = ""
-    internal_url = f"http://127.0.0.1:{INTERNAL_REST_PORT}/internal/get-config"
-    first_run = True
-
-    while True:
-        if first_run:
-            first_run = False
-        else:
-            time.sleep(INBOUND_WATCHER_INTERVAL)
-
-        try:
-            raw = http_get(internal_url)
-            config = json.loads(raw)
-        except Exception:
-            continue
-
-        if not config:
-            if isinstance(config, dict) and config.get("panelSni"):
-                # Panel SNI alone is still routeable: it feeds the node API
-                # upstream SNI before the first xray start.
-                pass
-            else:
-                continue
-
-        result = extract_inbound_config(config)
-        reality_routes = result["realityRoutes"]
-        http_routes = result["httpRoutes"]
-        conflicts = result["conflicts"]
-        panel_sni = result["panelSni"]
-
-        hash_input = json.dumps(
-            {"realityRoutes": reality_routes, "httpRoutes": http_routes, "panelSni": panel_sni},
-            sort_keys=True,
-        )
-        current_hash = hash_string(hash_input)
-
-        if current_hash == prev_hash:
-            continue
-
-        prev_hash = current_hash
-
-        for c in conflicts:
-            log(f"WARN: HTTP route conflict: path={c['path']} claimed by [{', '.join(c['tags'])}], skipped")
-
-        if panel_sni:
-            log(f"L4 route: PANEL sni={panel_sni} -> 127.0.0.1:{NODE_PORT}")
-
-        if reality_routes:
-            for r in reality_routes:
-                log(f"L4 route: REALITY snis=[{' '.join(r['serverNames'])}] -> 127.0.0.1:{r['port']}")
-
-        if http_routes:
-            for r in http_routes:
-                log(f"HTTP route: {r['path']} [{r['network']}] -> 127.0.0.1:{r['port']}")
-        elif reality_routes or conflicts:
-            log("No HTTP path inbounds detected, using fallback wildcard routes")
-
-        if not reality_routes and not http_routes and not conflicts:
-            if panel_sni:
-                log("Only panel SNI detected, using default HTTP routes")
-            else:
-                log("No routeable inbounds detected, using default config")
-
-        l4_block = generate_l4_route_block(reality_routes, panel_sni)
-        http_block = generate_http_route_block(http_routes)
-
-        with open(config_path, "w") as f:
-            f.write(generate_caddy_config(l4_block, http_block, panel_sni))
-
-        caddy_fmt(config_path)
-
-        if caddy_reload(config_path):
-            log("Caddy reloaded with updated inbound routing config")
-        else:
-            log("WARN: Caddy reload failed, will retry next cycle")
-
+    records = render(config)
+    if records:
+        sys.stdout.write("\n".join(records) + "\n")
     return 0
 
 
