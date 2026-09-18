@@ -8,6 +8,7 @@ _PROVISION_LIB_DIR="${_PROVISION_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 
 [[ -n "${_RW_NODE_CORE_LOADED:-}" ]] || source "${_PROVISION_LIB_DIR}/core.sh"
 
 PROVISION_REPO="${PROVISION_REPO:-x-dora/rw-node-go}"
+FRONT_REPO="${FRONT_REPO:-x-dora/rw-node-front}"
 CLOUDFLARED_REPO="${CLOUDFLARED_REPO:-cloudflare/cloudflared}"
 GEOCHECK_REPO="${GEOCHECK_REPO:-remnawave/geocheck}"
 GEOCHECK_VERSION_DEFAULT="${GEOCHECK_VERSION_DEFAULT:-0.3.0}"
@@ -73,6 +74,18 @@ has_rw_node_go_install() {
   [[ -x "$APP_BIN" && -f "$ASSET_DIR/geoip.dat" && -f "$ASSET_DIR/geosite.dat" ]]
 }
 
+resolve_front_version() {
+  if [[ -n "${FRONT_VERSION:-}" ]]; then
+    printf '%s' "$FRONT_VERSION"
+    return 0
+  fi
+
+  local version
+  version="$(resolve_latest_tag "$FRONT_REPO")"
+  [[ -n "$version" ]] || fail "unable to resolve latest rw-node-front release"
+  printf '%s' "$version"
+}
+
 ensure_rw_node_go() {
   if has_rw_node_go_install; then
     log "rw-node-go already installed; skipping download"
@@ -107,27 +120,43 @@ ensure_rw_node_go() {
   rm -rf "$tmp_dir"
 }
 
-ensure_caddy() {
-  if [[ -n "${CADDY_BIN:-}" && -x "${CADDY_BIN}" ]]; then
-    log "Caddy already available at ${CADDY_BIN}; skipping download"
+ensure_front_proxy() {
+  if [[ -n "${FRONT_BIN:-}" && -x "${FRONT_BIN}" ]]; then
+    log "front proxy already available at ${FRONT_BIN}; skipping download"
     return 0
   fi
 
-  if [[ -x "$CADDY_BIN_DEFAULT" ]]; then
-    log "Caddy already installed; skipping download"
-    CADDY_BIN="$CADDY_BIN_DEFAULT"
+  local target="${FRONT_BIN_DEFAULT:-${BIN_DIR:-}/rw-node-front}"
+
+  if [[ -x "$target" ]]; then
+    log "front proxy already installed; skipping download"
+    FRONT_BIN="$target"
+    export FRONT_BIN
     return 0
   fi
 
-  local arch url
-  arch="$(detect_arch)"
-  url="https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com/mholt/caddy-l4"
+  local asset version url tmp_dir stage_dir staged_bin
+  asset="$(detect_front_asset_name)"
+  version="$(resolve_front_version)"
+  url="https://github.com/$FRONT_REPO/releases/download/$version/$asset"
+  tmp_dir="$INSTALL_DIR/tmp/front"
+  stage_dir="$tmp_dir/stage"
+  staged_bin="$stage_dir/rw-node-front"
 
-  log "downloading Caddy with layer4 plugin (linux/$arch)"
-  mkdir -p "$BIN_DIR"
-  download_file "$url" "$CADDY_BIN_DEFAULT"
-  chmod 755 "$CADDY_BIN_DEFAULT"
-  CADDY_BIN="$CADDY_BIN_DEFAULT"
+  log "installing rw-node-front $version (linux/$(detect_arch))"
+  rm -rf "$tmp_dir"
+  mkdir -p "$stage_dir" "$(dirname "$target")"
+  download_file "$url" "$tmp_dir/$asset"
+  tar -xzf "$tmp_dir/$asset" -C "$stage_dir"
+
+  [[ -f "$staged_bin" ]] || fail "rw-node-front release asset is missing rw-node-front"
+  cp "$staged_bin" "$target"
+  chmod 755 "$target"
+  printf '%s\n' "$version" > "$FRONT_VERSION_FILE"
+  rm -rf "$tmp_dir"
+
+  FRONT_BIN="$target"
+  export FRONT_BIN
 }
 
 ensure_geocheck() {

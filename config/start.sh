@@ -8,10 +8,11 @@ set -euo pipefail
 
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 APP_BIN="${WORK_DIR}/bin/rw-node-go"
-CADDY_BIN="${CADDY_BIN:-${WORK_DIR}/bin/caddy}"
-CADDY_CONF_DIR="${WORK_DIR}/conf/caddy"
-CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
-CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-${WORK_DIR}/default-www}"
+FRONT_BIN="${FRONT_BIN:-${WORK_DIR}/bin/rw-node-front}"
+# 兼容改造前的 CADDY_SITE_DIR：老部署的 .env 里写的是旧名字。
+FRONT_SITE_DIR="${FRONT_SITE_DIR:-${CADDY_SITE_DIR:-${WORK_DIR}/www}}"
+FRONT_DEFAULT_SITE_DIR="${FRONT_DEFAULT_SITE_DIR:-${CADDY_DEFAULT_SITE_DIR:-${WORK_DIR}/default-www}}"
+SITE_BUILD_DIR="${SITE_BUILD_DIR:-${WORK_DIR}/conf/site}"
 RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-${WORK_DIR}/lib}"
 XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${WORK_DIR}/share/xray}"
 SSH_DIR="${SSH_DIR:-${WORK_DIR}/ssh}"
@@ -19,22 +20,23 @@ LOG_PREFIX="[rw-node]"
 
 # shellcheck source=../lib/core.sh
 source "${RW_NODE_LIB_DIR}/core.sh"
-# shellcheck source=../lib/caddy.sh
-source "${RW_NODE_LIB_DIR}/caddy.sh"
+# shellcheck source=../lib/front.sh
+source "${RW_NODE_LIB_DIR}/front.sh"
+# shellcheck source=../lib/ssh.sh
+source "${RW_NODE_LIB_DIR}/ssh.sh"
 
 # ── 目录初始化 ─────────────────────────────────────────────
 mkdir -p "${WORK_DIR}/bin" "${WORK_DIR}/logs" "${WORK_DIR}/run" \
-         "${WORK_DIR}/conf" "${WORK_DIR}/share/xray" "${CADDY_CONF_DIR}"
+         "${WORK_DIR}/conf" "${WORK_DIR}/share/xray" "${SITE_BUILD_DIR}"
 
 # ── 清理上一次运行遗留的运行时文件 ──────────────────────────
-rm -f "${WORK_DIR}/run"/*.sock "${WORK_DIR}/run"/*.pid \
-      /tmp/caddy-admin.sock
+rm -f "${WORK_DIR}/run"/*.sock "${WORK_DIR}/run"/*.pid
 
 # ── 加载环境变量 ───────────────────────────────────────────
 load_env_file "${WORK_DIR}/.env"
 
 # ── 设置默认值 ─────────────────────────────────────────────
-# 裸金属环境默认不启用 Caddy HTTP 前置（与 Docker 默认 true 不同）
+# 裸金属环境默认不启用前置分流（与 Docker 默认 true 不同）
 HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-false}"
 RW_NODE_DIR="${WORK_DIR}"
 set_default_env
@@ -60,14 +62,13 @@ fi
 
 # ── 进程管理 ───────────────────────────────────────────────
 app_pid=""
-caddy_pid=""
-watcher_pid=""
+front_pid=""
 ssh_service_pid=""
 
 terminate() {
     trap - INT TERM
     local _pid
-    for _pid in watcher_pid app_pid ssh_service_pid caddy_pid; do
+    for _pid in front_pid app_pid ssh_service_pid; do
         kill_if_running "${_pid}"
     done
     wait 2>/dev/null || true
@@ -88,10 +89,10 @@ log "HTTP_FRONT_ENABLED: ${HTTP_FRONT_ENABLED}"
 # ── 写入 PID 文件 ─────────────────────────────────────────
 echo "$$" > "${WORK_DIR}/run/rw-node.pid"
 
-# ── 启动 Caddy HTTP 前置（可选）─────────────────────────────
+# ── 启动前置分流（可选）────────────────────────────────────
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
     start_ssh_service
-    start_caddy_front
+    start_front_proxy
 elif [[ "${HTTP_FRONT_ENABLED}" != "false" ]]; then
     fail "HTTP_FRONT_ENABLED must be true or false"
 fi
@@ -101,16 +102,10 @@ cd "${WORK_DIR}"
 "${APP_BIN}" &
 app_pid=$!
 
-# ── 启动 Inbound 动态分流 watcher（可选）─────────────────────
-if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${INBOUND_WATCHER_ENABLED}" == "true" ]]; then
-    start_inbound_watcher "${CADDY_CONF_DIR}/Caddyfile" &
-    watcher_pid=$!
-fi
-
 # ── 等待子进程 ─────────────────────────────────────────────
-if [[ -n "${caddy_pid}" ]]; then
+if [[ -n "${front_pid}" ]]; then
     set +e
-    wait -n "${app_pid}" "${caddy_pid}"
+    wait -n "${app_pid}" "${front_pid}"
     status=$?
     set -e
 else

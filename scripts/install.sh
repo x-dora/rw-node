@@ -226,7 +226,7 @@ download_lib_scripts() {
     print_step "下载共享库脚本..."
     mkdir -p "${INSTALL_DIR}/lib"
 
-    local lib_files=(core.sh caddy.sh provision.sh cloudflared.sh inbound-watcher.js inbound-watcher.py Caddyfile.template)
+    local lib_files=(core.sh front.sh site.sh ssh.sh provision.sh cloudflared.sh)
     for f in "${lib_files[@]}"; do
         download_repo_file "$ref" "lib/${f}" "${INSTALL_DIR}/lib/${f}"
     done
@@ -239,7 +239,8 @@ setup_provision_vars() {
     APP_BIN="${BIN_DIR}/rw-node-go"
     ASSET_DIR="${INSTALL_DIR}/share/xray"
     VERSION_FILE="${INSTALL_DIR}/.rw-node-go-version"
-    CADDY_BIN_DEFAULT="${BIN_DIR}/caddy"
+    FRONT_BIN_DEFAULT="${BIN_DIR}/rw-node-front"
+    FRONT_VERSION_FILE="${INSTALL_DIR}/.rw-node-front-version"
     GEOCHECK_BIN_DEFAULT="${BIN_DIR}/geocheck"
     GEOCHECK_VERSION_FILE="${INSTALL_DIR}/.geocheck-version"
     CLOUDFLARED_BIN_DEFAULT="${BIN_DIR}/cloudflared"
@@ -369,15 +370,15 @@ XRAY_LOCATION_ASSET=${INSTALL_DIR}/share/xray
 # SNI_VERIFICATION=false
 ${GEOCHECK_ENV_LINE}
 
-### HTTP Front (Caddy) ###
+### HTTP Front (rw-node-front) ###
 # HTTP_FRONT_ENABLED=true
 # HTTP_FRONT_PORT=3000
 # XHTTP_UPSTREAM_PORT=8080
 # WS_UPSTREAM_PORT=8880
-# CADDY_INDEX_PAGE=mikutap
-# CADDY_DEFAULT_SITE_DIR=${INSTALL_DIR}/default-www
+# FRONT_INDEX_PAGE=mikutap
+# FRONT_DEFAULT_SITE_DIR=${INSTALL_DIR}/default-www
 
-### Inbound watcher ###
+### 路由表刷新 ###
 # INBOUND_WATCHER_ENABLED=true
 # INBOUND_WATCHER_INTERVAL=15
 EOF
@@ -492,11 +493,11 @@ else
     fi
 fi
 
-CADDY_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/caddy" || true)
-if [[ -n "${CADDY_PID:-}" ]]; then
-    echo "Caddy: ✅ 运行中"
+FRONT_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/rw-node-front" || true)
+if [[ -n "${FRONT_PID:-}" ]]; then
+    echo "Front proxy: ✅ 运行中"
 else
-    echo "Caddy: ⏳ 待启动"
+    echo "Front proxy: ⏳ 待启动"
 fi
 
 CLOUDFLARED_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/cloudflared" || true)
@@ -585,7 +586,7 @@ echo "停止 RW-Node..."
 kill_pid_file "${RUN_DIR}/rw-node.pid" "${WORK_DIR}/bin/rw-node-go"
 
 kill_processes_by_prefix "${WORK_DIR}/bin/rw-node-go"
-kill_processes_by_prefix "${WORK_DIR}/bin/caddy"
+kill_processes_by_prefix "${WORK_DIR}/bin/rw-node-front"
 kill_processes_by_prefix "${WORK_DIR}/bin/cloudflared"
 
 rm -f "${WORK_DIR}/run"/*.sock "${WORK_DIR}/run"/*.pid 2>/dev/null || true
@@ -764,10 +765,10 @@ main() {
     printf 'go\n' > "${INSTALL_DIR}/.rw-node-impl"
     print_success "RW-Node Go 实现安装完成"
 
-    # Install Caddy with layer4 plugin
-    print_step "安装 Caddy L4..."
-    ensure_caddy
-    print_success "Caddy L4 安装完成"
+    # Install rw-node-front：单端口复用的前置分流
+    print_step "安装 rw-node-front 前置分流..."
+    ensure_front_proxy
+    print_success "rw-node-front 安装完成"
 
     # Install geocheck for the stats/get-geocheck route (best-effort)
     print_step "安装 geocheck..."

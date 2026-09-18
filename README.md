@@ -6,8 +6,8 @@ RW-Node 是 [remnawave/node](https://github.com/remnawave/node) 的轻量化部�
 
 | 场景 | 推荐方式 | 说明 |
 |------|----------|------|
-| PaaS / Docker / 更小体积 | `ghcr.io/x-dora/rw-node:latest` | Go 实现，内置 Caddy HTTP 前置，无 Node.js 运行时 |
-| 没有 Docker 的 VPS / 容器 | `scripts/install.sh` | 自动安装 rw-node-go、Caddy、Xray geodata |
+| PaaS / Docker / 更小体积 | `ghcr.io/x-dora/rw-node:latest` | Go 实现，内置前置分流，无 Node.js 运行时 |
+| 没有 Docker 的 VPS / 容器 | `scripts/install.sh` | 自动安装 rw-node-go、rw-node-front、Xray geodata |
 
 ## 快速开始
 

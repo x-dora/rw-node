@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - '.go-paas-version'
+      - '.front-version'
       - 'lib/**'
       - 'scripts/**'
       - 'config/**'

@@ -3,34 +3,35 @@
 set -euo pipefail
 
 APP_BIN="/usr/local/bin/rw-node-go"
+FRONT_BIN="${FRONT_BIN:-$(command -v rw-node-front 2>/dev/null || true)}"
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 CONF_DIR="${WORK_DIR}/conf"
-CADDY_CONF_DIR="${CONF_DIR}/caddy"
-CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
-CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-/opt/rw-node/default-www}"
-CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
-CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
+# 兼容改造前的 CADDY_SITE_DIR：老部署的环境变量里写的是旧名字。
+FRONT_SITE_DIR="${FRONT_SITE_DIR:-${CADDY_SITE_DIR:-${WORK_DIR}/www}}"
+FRONT_DEFAULT_SITE_DIR="${FRONT_DEFAULT_SITE_DIR:-${CADDY_DEFAULT_SITE_DIR:-/opt/rw-node/default-www}}"
+SITE_BUILD_DIR="${SITE_BUILD_DIR:-${CONF_DIR}/site}"
 SSH_DIR="${SSH_DIR:-${WORK_DIR}/ssh}"
 LOG_PREFIX="[Go PaaS]"
 
 RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-/usr/local/lib/rw-node}"
 # shellcheck source=lib/core.sh
 source "${RW_NODE_LIB_DIR}/core.sh"
-# shellcheck source=lib/caddy.sh
-source "${RW_NODE_LIB_DIR}/caddy.sh"
+# shellcheck source=lib/front.sh
+source "${RW_NODE_LIB_DIR}/front.sh"
+# shellcheck source=lib/ssh.sh
+source "${RW_NODE_LIB_DIR}/ssh.sh"
 
 set_default_env
 
 app_pid=""
 health_pid=""
-caddy_pid=""
-watcher_pid=""
+front_pid=""
 ssh_service_pid=""
 
 terminate() {
     trap - INT TERM
     local _pid
-    for _pid in watcher_pid app_pid health_pid ssh_service_pid caddy_pid; do
+    for _pid in app_pid health_pid ssh_service_pid front_pid; do
         kill_if_running "${_pid}"
     done
     wait 2>/dev/null || true
@@ -67,10 +68,9 @@ if [[ ! -x "${APP_BIN}" ]]; then
 fi
 
 mkdir -p "${WORK_DIR}"
-rm -f "${CADDY_ADMIN_SOCK}"
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
     start_ssh_service
-    start_caddy_front
+    start_front_proxy
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
 else
@@ -81,14 +81,9 @@ cd "${WORK_DIR}"
 "${APP_BIN}" &
 app_pid=$!
 
-if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${INBOUND_WATCHER_ENABLED}" == "true" ]]; then
-    start_inbound_watcher "${CONF_DIR}/caddy/Caddyfile" &
-    watcher_pid=$!
-fi
-
-if [[ -n "${caddy_pid}" ]]; then
+if [[ -n "${front_pid}" ]]; then
     set +e
-    wait -n "${app_pid}" "${caddy_pid}"
+    wait -n "${app_pid}" "${front_pid}"
     status=$?
     set -e
 elif [[ -n "${health_pid}" ]]; then

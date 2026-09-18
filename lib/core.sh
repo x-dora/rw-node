@@ -157,7 +157,9 @@ set_default_env() {
   [[ -v XHTTP_UPSTREAM_PORT ]]    || XHTTP_UPSTREAM_PORT=8080
   [[ -v WS_UPSTREAM_PORT ]]       || WS_UPSTREAM_PORT=8880
   [[ -v HTTP_FRONT_ENABLED ]]     || HTTP_FRONT_ENABLED=true
-  [[ -v CADDY_INDEX_PAGE ]]       || CADDY_INDEX_PAGE="${CADDYIndexPage:-mikutap}"
+  # 静态页变量改用 FRONT_* 命名，但回退接受改造前的 CADDY_* / CADDYIndexPage，
+  # 避免老部署的 .env 升级后静默失效。
+  [[ -v FRONT_INDEX_PAGE ]]       || FRONT_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
   [[ -v INBOUND_WATCHER_ENABLED ]]  || INBOUND_WATCHER_ENABLED=true
   [[ -v INBOUND_WATCHER_INTERVAL ]] || INBOUND_WATCHER_INTERVAL=15
   [[ -v ARGO_TOKEN ]]             || ARGO_TOKEN=
@@ -168,7 +170,8 @@ set_default_env() {
 
   export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
   export RW_NODE_DIR XRAY_LOCATION_ASSET HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT
-  export HTTP_FRONT_ENABLED CADDY_INDEX_PAGE INBOUND_WATCHER_ENABLED INBOUND_WATCHER_INTERVAL
+  export HTTP_FRONT_ENABLED FRONT_INDEX_PAGE FRONT_SITE_DIR FRONT_DEFAULT_SITE_DIR
+  export INBOUND_WATCHER_ENABLED INBOUND_WATCHER_INTERVAL
   export ARGO_TOKEN ARGO_LOG_LEVEL
   export SSH_ENABLED SSH_PORT SSH_HOST_KEY SSH_AUTHORIZED_KEYS
 }
@@ -263,6 +266,14 @@ detect_rw_node_go_asset_name() {
   case "$(uname -m)" in
     x86_64|amd64)   printf '%s' "rw-node-go-linux-64.tar.gz" ;;
     aarch64|arm64)  printf '%s' "rw-node-go-linux-arm64-v8a.tar.gz" ;;
+    *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
+  esac
+}
+
+detect_front_asset_name() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf '%s' "rw-node-front-linux-64.tar.gz" ;;
+    aarch64|arm64)  printf '%s' "rw-node-front-linux-arm64-v8a.tar.gz" ;;
     *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
   esac
 }

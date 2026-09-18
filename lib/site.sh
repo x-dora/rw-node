@@ -13,6 +13,9 @@ _SITE_LIB_DIR="${_SITE_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 DEFAULT_INDEX_PAGE="mikutap"
 DEFAULT_INDEX_PAGE_URL="https://github.com/AYJCSGM/mikutap/archive/master.zip"
 SITE_DIR_MARKER=".rw-node-site-dir"
+# 改造前 Caddy 时代用的 marker 名。老部署升级后目录里躺的是这个名字，
+# 不认它就会被当成「自定义非空目录」而拒绝重建静态页。
+LEGACY_SITE_DIR_MARKER=".rw-node-caddy-site-dir"
 
 resolve_index_page() {
     local resource="$1"
@@ -149,7 +152,7 @@ site_dir_can_be_reset() {
         default_site_real="$(canonical_path "${WORK_DIR}/www")"
     fi
 
-    if [[ -f "${site_real}/${SITE_DIR_MARKER}" || "${site_real}" == "${default_site_real}" ]]; then
+    if [[ -f "${site_real}/${SITE_DIR_MARKER}" || -f "${site_real}/${LEGACY_SITE_DIR_MARKER}" || "${site_real}" == "${default_site_real}" ]]; then
         return 0
     fi
 

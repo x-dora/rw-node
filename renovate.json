@@ -12,11 +12,28 @@
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "x-dora/rw-node-go",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.front-version$/"
+      ],
+      "matchStrings": ["(?<currentValue>.+?)\\s*$"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "x-dora/rw-node-front",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
     {
       "matchDepNames": ["x-dora/rw-node-go"],
+      "automerge": true,
+      "automergeType": "pr",
+      "commitMessageTopic": "upstream {{depName}}",
+      "commitMessageExtra": "to {{newVersion}}"
+    },
+    {
+      "matchDepNames": ["x-dora/rw-node-front"],
       "automerge": true,
       "automergeType": "pr",
       "commitMessageTopic": "upstream {{depName}}",

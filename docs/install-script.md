@@ -1,6 +1,6 @@
 # 一键脚本安装
 
-一键脚本适合没有 Docker 的 VPS、VM 或容器环境。脚本会安装 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) Go 实现及所需组件（Caddy、Xray geodata），生成配置，并根据环境使用 systemd 服务或前台辅助命令管理进程。
+一键脚本适合没有 Docker 的 VPS、VM 或容器环境。脚本会安装 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) Go 实现及所需组件（rw-node-front、Xray geodata），生成配置，并根据环境使用 systemd 服务或前台辅助命令管理进程。
 
 ## 系统要求
 
@@ -63,11 +63,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | 组件 | 路径 | 说明 |
 |------|------|------|
 | rw-node-go | `bin/rw-node-go` | Go 实现主程序 |
-| Caddy (L4) | `bin/caddy` | 带 Layer 4 插件的 Caddy，支持 TLS/HTTP 复用 |
+| rw-node-front | `bin/rw-node-front` | 前置分流进程，在单端口上复用 SSH/TLS/HTTP |
 | geocheck | `bin/geocheck` | `stats/get-geocheck` 路由依赖的报告二进制（best-effort，失败仅告警） |
 | Xray geodata | `share/xray/geoip.dat`, `geosite.dat` | Xray 路由规则数据 |
-| 共享库 | `lib/` | core.sh, caddy.sh, provision.sh 等共享脚本 |
-| 默认伪装页面 | `default-www/` | mikutap 静态页面（Caddy HTTP 前置使用） |
+| 共享库 | `lib/` | core.sh, front.sh, site.sh, ssh.sh, provision.sh 等共享脚本 |
+| 默认伪装页面 | `default-www/` | mikutap 静态页面（前置分流使用） |
 | cloudflared | `bin/cloudflared` | Cloudflare Tunnel（可选） |
 
 geocheck 安装成功时，安装器会在 `.env` 中写入 `GEOCHECK_BINARY_PATH` 指向 `bin/geocheck`。
@@ -129,16 +129,18 @@ RW_NODE_DIR=/data/rw-node bash <(curl -fsSL https://raw.githubusercontent.com/x-
 
 ## HTTP 前置（可选）
 
-一键安装也支持启用 Caddy HTTP 前置（与 Docker PaaS 镜像相同的能力），在 `.env` 中设置：
+一键安装也支持启用前置分流（与 Docker PaaS 镜像相同的能力），在 `.env` 中设置：
 
 ```bash
 HTTP_FRONT_ENABLED=true
 ```
 
-启用后，Caddy Layer 4 会在 `HTTP_FRONT_PORT`（默认 3000）上监听，复用 TLS 和 HTTP 流量：
-- TLS 连接直通到 `NODE_PORT`
+启用后，前置进程会在 `HTTP_FRONT_PORT`（默认 3000）上监听，按连接首字节复用 SSH / TLS / HTTP：
+- SSH 连接（首 4 字节 `SSH-`）转发到内置 sshd-lite
+- TLS 连接按 SNI 直通：命中 REALITY `serverNames` 转对应 Xray 端口，其余转 `NODE_PORT`
 - `/xh-*` 路径转发到 `XHTTP_UPSTREAM_PORT`（默认 8080）
 - `/ws-*` 路径转发到 `WS_UPSTREAM_PORT`（默认 8880）
+- 配置下发的 inbound 路径按其端口直通
 - 其他路径返回静态伪装页面
 
 ## 常用环境变量
@@ -153,7 +155,7 @@ HTTP_FRONT_ENABLED=true
 | `GEOCHECK_BINARY_PATH` | geocheck 二进制路径覆盖（安装器自动写入） | - |
 | `RW_NODE_DIR` | 工作目录 | `/opt/rw-node` |
 | `XRAY_LOCATION_ASSET` | Xray 资源文件目录 | `${RW_NODE_DIR}/share/xray` |
-| `HTTP_FRONT_ENABLED` | 是否启用 Caddy HTTP 前置 | `false` |
+| `HTTP_FRONT_ENABLED` | 是否启用前置分流 | `false` |
 
 ## 注意事项
 

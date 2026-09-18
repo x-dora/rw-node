@@ -50,21 +50,18 @@ jobs:
           echo "version=$version_stripped" >> "$GITHUB_OUTPUT"
           echo "version_raw=$version" >> "$GITHUB_OUTPUT"
 
-      # 固定 Caddy 版本作为 build-arg:CADDY_VERSION=latest 每次解析到新 tag
-      # 会让 buildx 层缓存必然失效;固定 tag 后 gha 缓存可跨构建命中,
-      # Caddy 编译层(最耗时)整体跳过。缓存未命中时也会走 Actions 的
-      # cache mount(/go/pkg/mod、/root/.cache/go-build)复用编译产物。
-      - name: Resolve Caddy version
-        id: caddy_version
+      # .front-version 由 Renovate 跟随 rw-node-front 的 release 更新；镜像里
+      # 钉住一个已知可用的前置版本，而不是每次解析 latest。
+      - name: Resolve rw-node-front version
+        id: front_version
         run: |
           set -euo pipefail
-          caddy_version="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name')"
-          if [[ -z "$caddy_version" || "$caddy_version" == "null" ]]; then
-            echo "::warning::Unable to resolve latest Caddy version; falling back to latest"
-            caddy_version="latest"
+          version="$(tr -d '[:space:]' < .front-version)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Unable to resolve rw-node-front version from .front-version"
+            exit 1
           fi
-          echo "caddy_version=${caddy_version}" >> "$GITHUB_OUTPUT"
-          echo "Resolved Caddy version: ${caddy_version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata
         id: meta
@@ -89,8 +86,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            CADDY_VERSION=${{ steps.caddy_version.outputs.caddy_version }}
             RW_NODE_GO_VERSION=${{ steps.go_version.outputs.version_raw }}
+            RW_NODE_FRONT_VERSION=${{ steps.front_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -1,6 +1,6 @@
 # PaaS HTTPS 直连
 
-PaaS 镜像适合 Render、Koyeb、Railway、Fly.io 等只提供 HTTP/HTTPS 回源端口的平台。它在容器内启动 Caddy HTTP 前置，把平台 HTTPS 域名收到的请求按路径转发到本机不同服务，并把未命中特定路径的请求伪装成静态页面。
+PaaS 镜像适合 Render、Koyeb、Railway、Fly.io 等只提供 HTTP/HTTPS 回源端口的平台。它在容器内启动前置分流进程，把平台 HTTPS 域名收到的请求按路径转发到本机不同服务，并把未命中特定路径的请求伪装成静态页面。
 
 推荐镜像：
 
@@ -14,7 +14,7 @@ ghcr.io/x-dora/rw-node:latest
 Remnawave Panel
   -> https://<paas-domain>
   -> PaaS HTTP(S)
-  -> Caddy:${PORT:-3000}
+  -> front proxy:${PORT:-3000}
   -> /node/* 或 /vision/*
   -> 127.0.0.1:NODE_PORT
 ```
@@ -61,36 +61,36 @@ Remnawave Panel 中节点地址填写 PaaS 提供的 HTTPS 域名，例如：
 https://rw-node.example-paas.app
 ```
 
-## Caddy 路由规则
+## 路由规则
 
-PaaS 镜像默认启动 Caddy HTTP 前置，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径分流到本机服务：
+PaaS 镜像默认启动前置分流进程，监听 `${PORT:-3000}`。当 PaaS 提供 HTTP/HTTPS 回源端口时，可以用同一个公网端口按路径分流到本机服务：
 
 ```text
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /xh-*     -> 127.0.0.1:8080
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /ws-*     -> 127.0.0.1:8880
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /node/*   -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /vision/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> /health   -> 200 ok
-PaaS HTTP(S) -> Caddy:${PORT:-3000} -> 其他路径   -> 静态伪装页面
+PaaS HTTP(S) -> front:${PORT:-3000} -> /xh-*     -> 127.0.0.1:8080
+PaaS HTTP(S) -> front:${PORT:-3000} -> /ws-*     -> 127.0.0.1:8880
+PaaS HTTP(S) -> front:${PORT:-3000} -> /node/*   -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
+PaaS HTTP(S) -> front:${PORT:-3000} -> /vision/* -> 127.0.0.1:NODE_PORT (HTTPS, verify none)
+PaaS HTTP(S) -> front:${PORT:-3000} -> /health   -> 200 ok
+PaaS HTTP(S) -> front:${PORT:-3000} -> 其他路径   -> 静态伪装页面
 ```
 
-`/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。Caddy 到 Xray 使用明文 HTTP，不做 HTTPS upstream。
+`/xh-*` 和 `/ws-*` 表示路径分别以 `/xh-` 和 `/ws-` 开头，例如 `/xh-a`、`/xh-test`、`/ws-a`。前置进程到 Xray 使用明文 HTTP，不做 HTTPS upstream。
 
 `/node/*` 和 `/vision/*` 会转发到本机 `NODE_PORT` 的 HTTPS 服务，并跳过 upstream 证书校验，以兼容节点自签证书。
 
 除 `/health`、`/xh-*`、`/ws-*`、`/node/*`、`/vision/*` 之外的路径会从静态伪装页面目录返回文件；找不到文件时回退到 `index.html`。`/xh`、`/xh/abc`、`/ws`、`/ws/abc` 不会匹配前置代理规则，会落到静态页面。
 
-`HTTP_FRONT_ENABLED=false` 时不会启动 Caddy 分流，也不会加载静态伪装页面，只会在 PaaS 下发了 `PORT` 且该端口不等于 `NODE_PORT` 时启动一个简单 HTTP health server。这种模式不能承载 `/xh-*`、`/ws-*` 或 Panel API 转发。
+`HTTP_FRONT_ENABLED=false` 时不会启动前置分流，也不会加载静态伪装页面，只会在 PaaS 下发了 `PORT` 且该端口不等于 `NODE_PORT` 时启动一个简单 HTTP health server。这种模式不能承载 `/xh-*`、`/ws-*` 或 Panel API 转发。
 
 ## 静态伪装页面
 
-`CADDY_INDEX_PAGE` 用于指定 Caddy 未命中代理路径时展示的静态页面资源，默认值是 `mikutap`。PaaS 镜像会在构建阶段预置默认 mikutap 页面，运行时默认只复制镜像内置资源，不会在冷启动时同步访问 GitHub。为了兼容参考项目中的变量名，也支持 `CADDYIndexPage` 作为别名；如果两个变量同时存在，优先使用 `CADDY_INDEX_PAGE`。
+`FRONT_INDEX_PAGE` 用于指定未命中代理路径时展示的静态页面资源，默认值是 `mikutap`。PaaS 镜像会在构建阶段预置默认 mikutap 页面，运行时默认只复制镜像内置资源，不会在冷启动时同步访问 GitHub。为兼容改造前的部署，旧名 `CADDY_INDEX_PAGE` 和 `CADDYIndexPage` 仍会被接受。
 
 资源值可以是内置关键字、`http://` / `https://` URL、本地文件路径或本地目录路径。URL 或本地文件可以指向 zip、tar.gz 或单个 HTML 文件；压缩包内会自动查找最靠前的 `index.html` 所在目录作为站点根目录。
 
-`CADDY_SITE_DIR` 是 Caddy 实际服务的生成目录，入口脚本启动时会重建它。不要把自有静态页挂载到 `CADDY_SITE_DIR`，也不要把 `CADDY_INDEX_PAGE` 指向 `CADDY_SITE_DIR` 本身、其中的文件或包含 `CADDY_SITE_DIR` 的父目录；本地静态页应放在其他独立目录，再通过 `CADDY_INDEX_PAGE=/path/to/site` 指定。
+`FRONT_SITE_DIR` 是前置进程实际服务的生成目录，入口脚本启动时会重建它。不要把自有静态页挂载到 `FRONT_SITE_DIR`，也不要把 `FRONT_INDEX_PAGE` 指向 `FRONT_SITE_DIR` 本身、其中的文件或包含 `FRONT_SITE_DIR` 的父目录；本地静态页应放在其他独立目录，再通过 `FRONT_INDEX_PAGE=/path/to/site` 指定。
 
-为避免误删持久化目录，自定义 `CADDY_SITE_DIR` 如果已经非空，必须包含入口脚本生成的 `.rw-node-caddy-site-dir` marker 文件才允许重建。首次使用自定义生成目录时应指向一个空目录；默认 `${RW_NODE_DIR}/www` 会自动初始化 marker。
+为避免误删持久化目录，自定义 `FRONT_SITE_DIR` 如果已经非空，必须包含入口脚本生成的 `.rw-node-site-dir` marker 文件才允许重建（改造前生成的 `.rw-node-caddy-site-dir` 同样被接受，便于老部署平滑升级）。首次使用自定义生成目录时应指向一个空目录；默认 `${RW_NODE_DIR}/www` 会自动初始化 marker。
 
 示例：
 
@@ -100,7 +100,7 @@ docker run -d \
   -e SECRET_KEY=YOUR_SECRET_KEY \
   -e NODE_PORT=2222 \
   -e NODE_TLS_CLIENT_AUTH=none \
-  -e CADDY_INDEX_PAGE=webgl-fluid-simulation \
+  -e FRONT_INDEX_PAGE=webgl-fluid-simulation \
   ghcr.io/x-dora/rw-node:latest
 ```
 
@@ -110,7 +110,7 @@ docker run -d \
 |--------|------|
 | `mikutap` | 镜像构建阶段预置的 mikutap 页面 |
 | `mikutap-remote` | `https://github.com/AYJCSGM/mikutap/archive/master.zip` |
-| `caddy` | Caddy welcome 页面 |
+| `welcome` | 通用 welcome 页面（旧名 `caddy` 仍可用） |
 | `3dcelist` | 3DCEList 元素周期表 |
 | `spotify` | Spotify Landing Page Redesign |
 | `dev-landing-page` | dev-landing-page |
@@ -122,7 +122,7 @@ docker run -d \
 | `loruki` | loruki-website |
 | `bongo-cat` | bongo.cat |
 
-如果静态页面资源下载失败、路径不存在或压缩包内没有 `index.html`，入口脚本会生成一个最小 fallback 页面，避免 Caddy 前置启动失败。
+如果静态页面资源下载失败、路径不存在或压缩包内没有 `index.html`，入口脚本会生成一个最小 fallback 页面，避免前置进程启动失败。
 
 ## 环境变量
 
@@ -137,31 +137,31 @@ docker run -d \
 | 变量名 | 默认值 | 描述 |
 |--------|--------|------|
 | `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
-| `NODE_TLS_CLIENT_AUTH` | `mtls` | PaaS HTTPS 直连推荐设置为 `none`，避免 PaaS/Caddy 前置无法透传客户端证书导致 Panel 连接失败 |
+| `NODE_TLS_CLIENT_AUTH` | `mtls` | PaaS HTTPS 直连推荐设置为 `none`，避免 PaaS/前置层无法透传客户端证书导致 Panel 连接失败 |
 | `SNI_VERIFICATION` | `false` | Panel 派生 SNI 门控开关，开启后 node 主 API 只放行派生 SNI 的握手，详见下方「Panel SNI 验证」 |
 | `GEOCHECK_BINARY_PATH` | - | geocheck 二进制路径覆盖（默认 `/usr/local/bin/geocheck`）；裸机安装会自动写入该变量 |
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
 | `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
-| `PORT` | - | PaaS 下发的 HTTP 回源端口；Caddy 优先监听该端口 |
-| `HTTP_FRONT_ENABLED` | `true` | 是否启动 Caddy HTTP 前置；设为 `false` 时回退为简单 health server |
-| `HTTP_FRONT_PORT` | `${PORT:-3000}` | Caddy HTTP 前置监听端口，通常不需要手动设置 |
+| `PORT` | - | PaaS 下发的 HTTP 回源端口；前置进程优先监听该端口 |
+| `HTTP_FRONT_ENABLED` | `true` | 是否启动前置分流；设为 `false` 时回退为简单 health server |
+| `HTTP_FRONT_PORT` | `${PORT:-3000}` | 前置进程监听端口，通常不需要手动设置 |
 | `XHTTP_UPSTREAM_PORT` | `8080` | `/xh-` 前缀流量转发到的本机 xhttp 明文 HTTP 端口 |
 | `WS_UPSTREAM_PORT` | `8880` | `/ws-` 前缀流量转发到的本机 WebSocket 明文 HTTP 端口 |
-| `CADDY_INDEX_PAGE` | `mikutap` | 静态伪装页面资源，支持内置关键字、URL、本地文件或本地目录 |
-| `CADDY_SITE_DIR` | `${RW_NODE_DIR}/www` | Caddy 静态伪装页面生成目录，启动时会重建；自定义非空目录需要 `.rw-node-caddy-site-dir` marker |
-| `CADDY_DEFAULT_SITE_DIR` | `/opt/rw-node/default-www` | 镜像内置默认静态页面目录，通常不需要手动设置 |
+| `FRONT_INDEX_PAGE` | `mikutap` | 静态伪装页面资源，支持内置关键字、URL、本地文件或本地目录 |
+| `FRONT_SITE_DIR` | `${RW_NODE_DIR}/www` | 静态伪装页面生成目录，启动时会重建；自定义非空目录需要 `.rw-node-site-dir` marker |
+| `FRONT_DEFAULT_SITE_DIR` | `/opt/rw-node/default-www` | 镜像内置默认静态页面目录，通常不需要手动设置 |
 | `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS 镜像内应用文件目录，通常不要修改 |
 | `INBOUND_WATCHER_ENABLED` | `true` | 是否启用 Inbound 动态分流 watcher，详见下方说明 |
-| `INBOUND_WATCHER_INTERVAL` | `15` | Inbound watcher 轮询间隔（秒） |
+| `INBOUND_WATCHER_INTERVAL` | `15` | 路由表刷新轮询间隔（秒） |
 
-## Inbound 动态分流
+## 路由表刷新
 
-Go PaaS 镜像默认启用 Inbound 动态分流（`INBOUND_WATCHER_ENABLED=true`）。启用后，后台 watcher 会轮询 rw-node-go 内部 API，自动提取 Panel 下发的所有 inbound 配置，按协议类型生成对应的分流规则并热重载 Caddy。
+Go PaaS 镜像默认启用路由表刷新（`INBOUND_WATCHER_ENABLED=true`）。启用后，前置进程会按 `INBOUND_WATCHER_INTERVAL` 轮询 rw-node-go 内部 API，把 Panel 下发的所有 inbound 配置解析成分流路由表，并整体原子替换。
 
 支持的分流方式：
 
-- **REALITY SNI 分流**（L4 层）：提取 REALITY inbound 的 `serverNames` 和端口，生成 Caddy Layer 4 SNI 规则，TLS + 匹配的 SNI 直通到对应 Xray 端口
-- **HTTP 路径分流**（HTTP 层）：提取 ws/xhttp/httpupgrade inbound 的 path 和端口，为每个 path 生成精确路由规则
+- **REALITY SNI 分流**（L4 层）：提取 REALITY inbound 的 `serverNames` 和端口，TLS + 匹配的 SNI 直通到对应 Xray 端口
+- **HTTP 路径分流**（L4 层）：提取 ws/xhttp/httpupgrade inbound 的 path 和端口，按路径**裸转发**到对应端口
 - **冲突检测**：同一 path 被多个不同端口的 inbound 使用时，发出警告并跳过该 path
 - **兜底路由**：无具体 ws/xhttp inbound 时，保留 `/xh-*` → `XHTTP_UPSTREAM_PORT` 和 `/ws-*` → `WS_UPSTREAM_PORT` 通配符路由
 
@@ -171,15 +171,15 @@ Go PaaS 镜像默认启用 Inbound 动态分流（`INBOUND_WATCHER_ENABLED=true`
 PaaS 入站端口
   ├─ TLS + SNI 匹配 REALITY 伪装域名 → 127.0.0.1:REALITY_PORT（TCP 直通）
   ├─ TLS + 其他 SNI（Panel 连接等）   → 127.0.0.1:NODE_PORT
-  └─ 非 TLS                           → Caddy HTTP 路径路由
+  └─ 非 TLS                           → 前置进程按路径分流
                                           ├─ /ws-a  → 127.0.0.1:8080
                                           ├─ /xh-b  → 127.0.0.1:8081
                                           └─ 其他   → 静态伪装页面
 ```
 
-Panel 连接使用 PaaS HTTPS 域名作为 SNI，REALITY 客户端使用伪装域名（如 `www.microsoft.com`）作为 SNI，两者天然不同，Caddy Layer 4 可以按 SNI 区分。
+Panel 连接使用 PaaS HTTPS 域名作为 SNI，REALITY 客户端使用伪装域名（如 `www.microsoft.com`）作为 SNI，两者天然不同，前置层可以按 SNI 区分。
 
-Inbound 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置变化，仅在路由状态改变时重载 Caddy。Panel 未下发配置或没有可分流的 inbound 时，保持默认兜底行为。
+Inbound 配置由 Panel 动态下发；前置进程在每次轮询时重建路由表并整体替换，只在内容变化时打日志。拉取或解析失败时保留上一份可用路由表，不会退回全默认。Panel 未下发配置或没有可分流的 inbound 时，保持默认兜底行为。
 
 设为 `INBOUND_WATCHER_ENABLED=false` 可完全禁用此功能。
 
@@ -195,18 +195,18 @@ SNI_VERIFICATION=true
 
 本镜像对两种流量路径的处理：
 
-- **TLS 直通（Layer 4）**：Panel 经 Caddy 前置的 TLS ClientHello 携带派生 SNI。watcher 从 internal API 读取派生 SNI（`panelSni` 字段），生成显式的 `@panel` L4 规则直通到 `NODE_PORT`；未命中时兜底 `@tls` 规则同样直通，行为一致。
-- **HTTP 回源（PaaS 终结 TLS）**：Caddy 以 `https://127.0.0.1:NODE_PORT` 回源 node API。watcher 会在 `/node/*` upstream 上设置 `tls_server_name <派生SNI>`，否则 node 开启 `SNI_VERIFICATION` 后会拒绝 Caddy 的回源握手。此时对公网而言 TLS 已被 PaaS 平台终结，SNI 门控实际承担的是 Caddy 到 node 的回源段校验，真正的公网准入由平台 HTTPS 入口负责。
+- **TLS 直通（Layer 4）**：Panel 经前置层的 TLS ClientHello 携带派生 SNI，与其它的 REALITY 伪装域名天然不同，按 SNI 匹配分流到 `NODE_PORT`；未命中 REALITY 列表的连接同样直通到 `NODE_PORT`，行为一致。
+- **HTTP 回源（PaaS 终结 TLS）**：前置进程以 `https://127.0.0.1:NODE_PORT` 回源 node API，并在 `/node/*` 上游设置 `tls_server_name <派生SNI>`，否则 node 开启 `SNI_VERIFICATION` 后会拒绝回源握手。此时对公网而言 TLS 已被 PaaS 平台终结，SNI 门控实际承担的是前置层到 node 的回源段校验，真正的公网准入由平台 HTTPS 入口负责。
 
 注意事项：
 
-- 派生 SNI 在 watcher 首轮轮询（默认 15s）后写入 Caddy 配置；Panel 在此之前连接会走兜底规则（未开启 `SNI_VERIFICATION` 时无影响）。
-- 派生 SNI 本身不是机密（无法从它反推密钥），watcher 日志会打印它。
+- 派生 SNI 由前置进程自己从 `SECRET_KEY` 派生（不再依赖 `/internal/get-config` 注入的 `panelSni` 字段），启动即可用，不经过轮询。
+- 派生 SNI 本身不是机密（无法从它反推密钥），前置进程日志会打印它。
 - 需要配套支持官方 node 3.4.1 contract 的 Panel 版本。
 
 ## xhttp / WebSocket 路径
 
-如果使用 Caddy HTTP 前置承载 xhttp/ws 流量，客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。
+如果使用前置分流承载 xhttp/ws 流量，客户端或面板下发的 xhttp/ws 配置应填写 PaaS 提供的 HTTP/HTTPS 域名和单个公网端口，并用不同路径前缀区分协议。
 
 - xhttp inbound 默认转发到本机 `8080` 明文 HTTP。
 - ws inbound 默认转发到本机 `8880` 明文 HTTP。

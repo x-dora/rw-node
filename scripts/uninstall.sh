@@ -109,7 +109,7 @@ stop_services() {
     kill_pid_file "${INSTALL_DIR}/run/rw-node.pid" "${INSTALL_DIR}/bin/rw-node-go"
 
     kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-node-go"
-    kill_processes_by_prefix "${INSTALL_DIR}/bin/caddy"
+    kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-node-front"
     kill_processes_by_prefix "${INSTALL_DIR}/bin/cloudflared"
 }
 
@@ -155,7 +155,7 @@ remove_files() {
     remove_symlink_if_owned /usr/local/bin/rw-node-stop
     remove_symlink_if_owned /usr/local/bin/cloudflared
     remove_symlink_if_owned /usr/local/bin/rw-node-go
-    remove_symlink_if_owned /usr/local/bin/caddy
+    remove_symlink_if_owned /usr/local/bin/rw-node-front
 
     print_success "文件已删除"
 }
