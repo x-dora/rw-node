@@ -9,8 +9,6 @@ const PREFIX = '[node-starter]';
 const ROOT_DIR = __dirname;
 const START_SCRIPT = path.join(ROOT_DIR, 'start.sh');
 const INSTALL_DIR = path.join(ROOT_DIR, '.rw-node');
-const WATCHER_SCRIPT = path.join(INSTALL_DIR, 'lib', 'inbound-watcher.js');
-const WATCHER_CONFIG_PATH = path.join(INSTALL_DIR, 'conf', 'caddy', 'Caddyfile');
 
 if (!fs.existsSync(START_SCRIPT)) {
   console.error(`${PREFIX} ERROR: missing start script: ${START_SCRIPT}`);
@@ -38,39 +36,16 @@ loadEnvFile(path.join(ROOT_DIR, '.env'));
 if (!process.env.HTTP_FRONT_PORT) {
   process.env.HTTP_FRONT_PORT = process.env.PORT || '3000';
 }
-if (!process.env.CADDY_HTTP_PORT) {
-  process.env.CADDY_HTTP_PORT = String(parseInt(process.env.HTTP_FRONT_PORT, 10) + 1);
-}
-if (!process.env.CADDY_HTTP_SOCK) {
-  process.env.CADDY_HTTP_SOCK = path.join(INSTALL_DIR, 'caddy', 'http.sock');
-}
-if (!process.env.CADDY_ADMIN_SOCK) {
-  process.env.CADDY_ADMIN_SOCK = path.join(INSTALL_DIR, 'caddy', 'admin.sock');
-}
-if (!process.env.CADDY_BIN) {
-  process.env.CADDY_BIN = path.join(INSTALL_DIR, 'bin', 'caddy');
-}
-if (!process.env.CADDY_SITE_DIR) {
-  process.env.CADDY_SITE_DIR = path.join(INSTALL_DIR, 'www');
+// 前置实现换成 rw-node-front 后，原来那组 CADDY_* 不再被任何东西读取。
+if (!process.env.FRONT_SITE_DIR) {
+  process.env.FRONT_SITE_DIR = path.join(INSTALL_DIR, 'www');
 }
 
 const child = spawn('bash', [START_SCRIPT], {
   cwd: ROOT_DIR,
-  env: { ...process.env, INBOUND_WATCHER_EXTERNAL: 'true' },
+  env: process.env,
   stdio: 'inherit',
 });
-
-if (process.env.INBOUND_WATCHER_ENABLED !== 'false') {
-  (async () => {
-    while (!fs.existsSync(WATCHER_SCRIPT)) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    const { main: watcherMain } = require(WATCHER_SCRIPT);
-    await watcherMain(WATCHER_CONFIG_PATH);
-  })().catch((err) => {
-    console.error(`${PREFIX} WARN: watcher error: ${err.message}`);
-  });
-}
 
 let exiting = false;
 

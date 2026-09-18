@@ -9,15 +9,13 @@ CWD="$SCRIPT_DIR"
 INSTALL_DIR="$CWD/.rw-node"
 BIN_DIR="$INSTALL_DIR/bin"
 ASSET_DIR="$INSTALL_DIR/share/xray"
-CADDY_CONF_DIR="$INSTALL_DIR/conf/caddy"
-CADDY_DATA_DIR="$INSTALL_DIR/caddy/data"
-CADDY_CONFIG_DIR="$INSTALL_DIR/caddy/config"
-CADDY_ADMIN_SOCK="$INSTALL_DIR/caddy/admin.sock"
-CADDY_HTTP_SOCK="$INSTALL_DIR/caddy/http.sock"
-CADDY_SITE_DIR="${CADDY_SITE_DIR:-${INSTALL_DIR}/www}"
-CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-}"
+# 兼容改造前的 CADDY_SITE_DIR：老部署的 .env 里写的是旧名字。
+FRONT_SITE_DIR="${FRONT_SITE_DIR:-${CADDY_SITE_DIR:-${INSTALL_DIR}/www}}"
+FRONT_DEFAULT_SITE_DIR="${FRONT_DEFAULT_SITE_DIR:-${CADDY_DEFAULT_SITE_DIR:-}}"
+SITE_BUILD_DIR="${SITE_BUILD_DIR:-${INSTALL_DIR}/conf/site}"
 APP_BIN="$BIN_DIR/rw-node-go"
-CADDY_BIN_DEFAULT="$BIN_DIR/caddy"
+FRONT_BIN_DEFAULT="$BIN_DIR/rw-node-front"
+FRONT_VERSION_FILE="$INSTALL_DIR/.rw-node-front-version"
 CLOUDFLARED_BIN_DEFAULT="$BIN_DIR/cloudflared"
 VERSION_FILE="$INSTALL_DIR/.rw-node-go-version"
 CLOUDFLARED_VERSION_FILE="$INSTALL_DIR/.cloudflared-version"
@@ -32,12 +30,11 @@ LIB_VERSION="${LIB_VERSION:-main}"
 
 LIB_FILES=(
   core.sh
-  caddy.sh
+  front.sh
+  site.sh
+  ssh.sh
   provision.sh
   cloudflared.sh
-  inbound-watcher.js
-  inbound-watcher.py
-  Caddyfile.template
 )
 
 log() {
@@ -79,14 +76,18 @@ ensure_lib() {
 
 ensure_lib
 
-_CADDY_LIB_DIR="$LIB_DIR"
+_FRONT_LIB_DIR="$LIB_DIR"
+_SITE_LIB_DIR="$LIB_DIR"
+_SSH_LIB_DIR="$LIB_DIR"
 _PROVISION_LIB_DIR="$LIB_DIR"
 _CLOUDFLARED_LIB_DIR="$LIB_DIR"
 
 # shellcheck source=/dev/null
 source "$LIB_DIR/core.sh"
 # shellcheck source=/dev/null
-source "$LIB_DIR/caddy.sh"
+source "$LIB_DIR/front.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/ssh.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/provision.sh"
 # shellcheck source=/dev/null
@@ -96,17 +97,12 @@ RW_NODE_DIR_DEFAULT="$CWD"
 XRAY_LOCATION_ASSET_DEFAULT="$ASSET_DIR"
 ENV_FILE="$CWD/.env"
 
-caddy_pid=""
+front_pid=""
 app_pid=""
 cloudflared_pid=""
 cloudflared_mode=""
-watcher_pid=""
 ssh_service_pid=""
 shutting_down=0
-
-CADDY_HOME="$CWD"
-CADDY_XDG_DATA_HOME="$CADDY_DATA_DIR"
-CADDY_XDG_CONFIG_HOME="$CADDY_CONFIG_DIR"
 
 cleanup() {
   local code="${1:-0}"
@@ -116,7 +112,7 @@ cleanup() {
   fi
   shutting_down=1
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
+  for pid in "$app_pid" "$front_pid" "$cloudflared_pid" "$ssh_service_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
@@ -126,7 +122,7 @@ cleanup() {
   local timer_pid=$!
   while kill -0 "$timer_pid" 2>/dev/null; do
     local all_done=1
-    for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
+    for pid in "$app_pid" "$front_pid" "$cloudflared_pid" "$ssh_service_pid"; do
       if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         all_done=0
       fi
@@ -136,13 +132,13 @@ cleanup() {
   done
   kill "$timer_pid" 2>/dev/null || true
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
+  for pid in "$app_pid" "$front_pid" "$cloudflared_pid" "$ssh_service_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -KILL "$pid" 2>/dev/null || true
     fi
   done
 
-  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid" "$watcher_pid" "$ssh_service_pid"; do
+  for pid in "$app_pid" "$front_pid" "$cloudflared_pid" "$ssh_service_pid"; do
     [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
   done
   exit "$code"
@@ -181,9 +177,9 @@ main() {
   ensure_linux
   validate_ports
 
-  ensure_caddy
-  CADDY_BIN="${CADDY_BIN:-$CADDY_BIN_DEFAULT}"
-  export CADDY_BIN
+  ensure_front_proxy
+  FRONT_BIN="${FRONT_BIN:-$FRONT_BIN_DEFAULT}"
+  export FRONT_BIN
 
   ensure_rw_node_go
   install_geocheck
@@ -206,11 +202,10 @@ main() {
     CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$CLOUDFLARED_BIN_DEFAULT}"
   fi
 
-  CADDY_SKIP_PORT_WAIT=1
-  mkdir -p "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
-  rm -f "$CADDY_HTTP_SOCK" "$CADDY_ADMIN_SOCK"
+  FRONT_SKIP_PORT_WAIT=1
+  mkdir -p "$SITE_BUILD_DIR"
   start_ssh_service
-  start_caddy_front
+  start_front_proxy
 
   trap handle_signal INT TERM
 
@@ -218,19 +213,14 @@ main() {
   "$APP_BIN" &
   app_pid=$!
 
-  if [[ "${INBOUND_WATCHER_ENABLED:-true}" == "true" && "${INBOUND_WATCHER_EXTERNAL:-}" != "true" ]]; then
-    start_inbound_watcher "$CADDY_CONF_DIR/Caddyfile" &
-    watcher_pid=$!
-  fi
-
   if cloudflare_tunnel_enabled; then
     run_cloudflared_default
   fi
 
   while true; do
-    if ! kill -0 "$caddy_pid" 2>/dev/null; then
-      wait "$caddy_pid" || true
-      log "caddy exited"
+    if ! kill -0 "$front_pid" 2>/dev/null; then
+      wait "$front_pid" || true
+      log "front proxy exited"
       cleanup 1
     fi
     if ! kill -0 "$app_pid" 2>/dev/null; then

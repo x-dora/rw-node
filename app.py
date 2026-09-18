@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-import importlib.util
 import os
 import signal
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
 
 
@@ -13,8 +10,6 @@ PREFIX = "[python-starter]"
 ROOT_DIR = Path(__file__).resolve().parent
 START_SCRIPT = ROOT_DIR / "start.sh"
 INSTALL_DIR = ROOT_DIR / ".rw-node"
-WATCHER_SCRIPT = INSTALL_DIR / "lib" / "inbound-watcher.py"
-WATCHER_CONFIG_PATH = str(INSTALL_DIR / "conf" / "caddy" / "Caddyfile")
 
 child_process = None
 shutting_down = False
@@ -35,17 +30,6 @@ def load_env_file(filepath: Path) -> None:
         if len(val) >= 2 and val[0] in ('"', "'") and val[-1] == val[0]:
             val = val[1:-1]
         os.environ.setdefault(key, val)
-
-
-def run_watcher() -> None:
-    while not WATCHER_SCRIPT.exists():
-        time.sleep(0.5)
-    spec = importlib.util.spec_from_file_location(
-        "inbound_watcher", str(WATCHER_SCRIPT)
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.main(WATCHER_CONFIG_PATH)
 
 
 def terminate(signum: int) -> None:
@@ -79,26 +63,15 @@ def main() -> int:
     load_env_file(ROOT_DIR / ".env")
 
     os.environ.setdefault("HTTP_FRONT_PORT", os.environ.get("PORT", "3000"))
-    os.environ.setdefault(
-        "CADDY_HTTP_PORT", str(int(os.environ["HTTP_FRONT_PORT"]) + 1)
-    )
-    os.environ.setdefault(
-        "CADDY_HTTP_SOCK", str(INSTALL_DIR / "caddy" / "http.sock")
-    )
-    os.environ.setdefault(
-        "CADDY_ADMIN_SOCK", str(INSTALL_DIR / "caddy" / "admin.sock")
-    )
-    os.environ.setdefault("CADDY_BIN", str(INSTALL_DIR / "bin" / "caddy"))
-    os.environ.setdefault("CADDY_SITE_DIR", str(INSTALL_DIR / "www"))
+    # 前置实现换成 rw-node-front 后，原来那组 CADDY_*（HTTP 端口、socket 路径、
+    # 二进制路径）都不再被任何东西读取，只保留静态页目录。
+    os.environ.setdefault("FRONT_SITE_DIR", str(INSTALL_DIR / "www"))
 
     child_process = subprocess.Popen(
         ["bash", str(START_SCRIPT)],
         cwd=ROOT_DIR,
-        env={**os.environ, "INBOUND_WATCHER_EXTERNAL": "true"},
+        env=os.environ.copy(),
     )
-
-    if os.environ.get("INBOUND_WATCHER_ENABLED", "true") != "false":
-        threading.Thread(target=run_watcher, daemon=True).start()
 
     return_code = child_process.wait()
     if return_code < 0:
