@@ -137,7 +137,8 @@ PaaS 版额外变量：
 - `SSH_ENABLED` — 在 `HTTP_FRONT_PORT` 上复用 SSH 入口（默认 `false`）；需同时提供 `SSH_AUTHORIZED_KEYS`
 - `SSH_PORT` — 内置 sshd-lite 的本地监听端口（默认 `22222`，只绑 `127.0.0.1`）
 - `SSH_AUTHORIZED_KEYS` — 登录公钥，支持 `SSH_AUTHORIZED_KEYS_1`/`_2`/`_3` 分片拼接，与 `SECRET_KEY` 同规则
-- `SSH_HOST_KEY` — 可选，固定 host key 内容，避免容器重启后客户端报 host key 变化
+- `SSH_HOST_KEY` — 可选，固定 host key 内容（PEM），避免容器重启后客户端报 host key 变化
+- `SSH_HOST_KEY_SEED` — 可选，host key 种子；设置后 sshd-lite 直接由它派生 host key 且不落盘，优先级高于 `SSH_HOST_KEY`。种子等价于 host key 本身，需用 `openssl rand -hex 32` 这类高熵值
 - `SSHD_LITE_BIN` — 可选，指定已有 sshd-lite 二进制路径（设置后不下载）
 
 ## 注意事项
