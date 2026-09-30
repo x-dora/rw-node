@@ -251,6 +251,40 @@ ensure_cloudflared() {
 # （dropbear 只发 .tar.xz，而 GNU tar 解 xz 又要外部 xz 程序，精简容器常常没有），
 # 也不依赖宿主机 libc。它认证时不查系统用户库，容器以 /etc/passwd 中不存在的
 # 虚拟 uid 运行时同样能登录。
+#
+# 版本：SSHD_LITE_VERSION 指定时按它装，否则跟随最新 release。装完把版本记进
+# SSHD_LITE_VERSION_FILE，下次对不上就重下覆盖——否则「文件存在即跳过」等于装上
+# 就再也不更新，上游发了新版节点上也拿不到。front/rw-node-go 目前仍是「有文件就
+# 跳过」，没有这个比对。
+resolve_sshd_lite_version() {
+  if [[ -n "${SSHD_LITE_VERSION:-}" ]]; then
+    printf '%s' "$SSHD_LITE_VERSION"
+    return 0
+  fi
+  resolve_latest_tag "$SSHD_LITE_REPO"
+}
+
+installed_sshd_lite_version() {
+  local version_file="$1"
+  [[ -f "$version_file" ]] || return 0
+  tr -d '[:space:]' < "$version_file"
+}
+
+install_sshd_lite() {
+  local version="$1" target="$2" version_file="$3"
+  local arch url tmp_file
+  arch="$(detect_arch)"
+  url="https://github.com/$SSHD_LITE_REPO/releases/download/${version}/sshd-lite-linux-${arch}"
+  tmp_file="${INSTALL_DIR:-.}/tmp/sshd-lite"
+
+  log "installing sshd-lite $version (linux/$arch)"
+  mkdir -p "$(dirname "$target")" "$(dirname "$tmp_file")"
+  download_file "$url" "$tmp_file"
+  chmod 755 "$tmp_file"
+  mv "$tmp_file" "$target"
+  printf '%s\n' "$version" > "$version_file"
+}
+
 ensure_sshd_lite() {
   if [[ -n "${SSHD_LITE_BIN:-}" && -x "${SSHD_LITE_BIN}" ]]; then
     log "sshd-lite already available at ${SSHD_LITE_BIN}; skipping download"
@@ -258,25 +292,43 @@ ensure_sshd_lite() {
   fi
 
   local target="${SSHD_LITE_BIN_DEFAULT:-${BIN_DIR:-}/sshd-lite}"
+  local version_file="${SSHD_LITE_VERSION_FILE:-${INSTALL_DIR:-.}/.sshd-lite-version}"
 
-  if [[ -x "$target" ]]; then
-    log "sshd-lite already installed; skipping download"
+  # 解析失败的兜底交给下面判断，别让 set -e 在这里直接把启动带走。
+  local version=""
+  version="$(resolve_sshd_lite_version)" || true
+
+  if [[ -x "$target" && -n "$version" && "$(installed_sshd_lite_version "$version_file")" == "$version" ]]; then
+    log "sshd-lite $version already installed; skipping download"
     SSHD_LITE_BIN="$target"
     export SSHD_LITE_BIN
     return 0
   fi
 
-  local arch url tmp_file
-  arch="$(detect_arch)"
-  url="https://github.com/$SSHD_LITE_REPO/releases/latest/download/sshd-lite-linux-${arch}"
-  tmp_file="${INSTALL_DIR:-.}/tmp/sshd-lite"
+  # 解不出目标版本（多半是网络）时，已经装好的二进制照样能用——不该因为一次查询
+  # 失败就把还能用的 SSH 入口关掉。
+  if [[ -z "$version" ]]; then
+    if [[ -x "$target" ]]; then
+      log "WARN: 无法解析 sshd-lite 版本，沿用已安装的 $target"
+      SSHD_LITE_BIN="$target"
+      export SSHD_LITE_BIN
+      return 0
+    fi
+    fail "unable to resolve sshd-lite release and no local binary to fall back on"
+  fi
 
-  log "installing sshd-lite (linux/$arch)"
-  mkdir -p "$(dirname "$target")" "$(dirname "$tmp_file")"
-  download_file "$url" "$tmp_file"
-  chmod 755 "$tmp_file"
-  mv "$tmp_file" "$target"
-
-  SSHD_LITE_BIN="$target"
-  export SSHD_LITE_BIN
+  # 放进子 shell：download_file 失败时会调 fail（退出），那不该把调用方已经装好的
+  # 二进制一起带走。
+  if (install_sshd_lite "$version" "$target" "$version_file"); then
+    SSHD_LITE_BIN="$target"
+    export SSHD_LITE_BIN
+    return 0
+  fi
+  if [[ -x "$target" ]]; then
+    log "WARN: 安装 sshd-lite $version 失败，沿用已安装的 $target"
+    SSHD_LITE_BIN="$target"
+    export SSHD_LITE_BIN
+    return 0
+  fi
+  fail "unable to install sshd-lite $version"
 }
