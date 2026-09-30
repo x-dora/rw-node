@@ -22,6 +22,16 @@
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "x-dora/rw-node-front",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.sshd-lite-version$/"
+      ],
+      "matchStrings": ["(?<currentValue>.+?)\\s*$"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "x-dora/sshd-lite",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -34,6 +44,13 @@
     },
     {
       "matchDepNames": ["x-dora/rw-node-front"],
+      "automerge": true,
+      "automergeType": "pr",
+      "commitMessageTopic": "upstream {{depName}}",
+      "commitMessageExtra": "to {{newVersion}}"
+    },
+    {
+      "matchDepNames": ["x-dora/sshd-lite"],
       "automerge": true,
       "automergeType": "pr",
       "commitMessageTopic": "upstream {{depName}}",

@@ -30,6 +30,8 @@ ARG RW_NODE_GO_REPO=x-dora/rw-node-go
 ARG RW_NODE_GO_VERSION=latest
 ARG RW_NODE_FRONT_REPO=x-dora/rw-node-front
 ARG RW_NODE_FRONT_VERSION=latest
+ARG SSHD_LITE_REPO=x-dora/sshd-lite
+ARG SSHD_LITE_VERSION=latest
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
@@ -79,9 +81,14 @@ RUN set -ex; \
     fi; \
     printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
     printf '%s\n' "${RW_NODE_FRONT_VERSION}" > /opt/rw-node/.rw-node-front-version; \
-    curl -fsSL "https://github.com/x-dora/sshd-lite/releases/latest/download/sshd-lite-linux-${SSHD_LITE_ARCH}" \
+    if [ "${SSHD_LITE_VERSION}" = "latest" ]; then \
+        SSHD_LITE_VERSION="$(curl -fsSL "https://api.github.com/repos/${SSHD_LITE_REPO}/releases/latest" | jq -r '.tag_name')"; \
+    fi; \
+    test -n "${SSHD_LITE_VERSION}"; \
+    curl -fsSL "https://github.com/${SSHD_LITE_REPO}/releases/download/${SSHD_LITE_VERSION}/sshd-lite-linux-${SSHD_LITE_ARCH}" \
         -o /usr/local/bin/sshd-lite; \
     chmod 0755 /usr/local/bin/sshd-lite; \
+    printf '%s\n' "${SSHD_LITE_VERSION}" > /opt/rw-node/.sshd-lite-version; \
     rm -rf /tmp/* /var/cache/apk/*
 
 COPY docker-entrypoint.sh /usr/local/bin/

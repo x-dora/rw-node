@@ -63,6 +63,18 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # 同上：.sshd-lite-version 由 Renovate 跟随 x-dora/sshd-lite 的 release 更新。
+      - name: Resolve sshd-lite version
+        id: sshd_lite_version
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < .sshd-lite-version)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Unable to resolve sshd-lite version from .sshd-lite-version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -88,6 +100,7 @@ jobs:
           build-args: |
             RW_NODE_GO_VERSION=${{ steps.go_version.outputs.version_raw }}
             RW_NODE_FRONT_VERSION=${{ steps.front_version.outputs.version }}
+            SSHD_LITE_VERSION=${{ steps.sshd_lite_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

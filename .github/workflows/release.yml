@@ -9,6 +9,7 @@ on:
     paths:
       - '.go-paas-version'
       - '.front-version'
+      - '.sshd-lite-version'
       - 'lib/**'
       - 'scripts/**'
       - 'config/**'

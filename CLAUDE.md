@@ -12,6 +12,7 @@ RW-Node 是 [remnawave/node](https://github.com/remnawave/node) 的轻量化部�
 
 - `.go-paas-version` 记录当前追踪的 rw-node-go 版本（如 `v1.2.0`），由 Renovate 自动更新
 - `.front-version` 记录当前追踪的 rw-node-front 版本（前置分流进程，独立仓库），同样由 Renovate 更新
+- `.sshd-lite-version` 记录当前追踪的 sshd-lite 版本（内置 SSH 服务端，独立仓库），同样由 Renovate 更新
 - 代码/配置变更（上述版本文件、`Dockerfile`、`docker-entrypoint.sh`、`lib/`、`scripts/`、`config/`）推送到 main 后触发 `release.yml` → `docker-build.yml` → 构建多架构 Docker 镜像
 - 手动触发 `workflow_dispatch` 可强制构建指定版本
 
@@ -81,6 +82,7 @@ Panel SNI 由前置进程自己从 `SECRET_KEY` 派生（复刻 rw-node-go 的 H
 - `lib/provision.sh` — 组件下载安装库
 - `lib/cloudflared.sh` — Cloudflare Tunnel 管理
 - `.front-version` — 钉住 rw-node-front 版本，由 Renovate 更新
+- `.sshd-lite-version` — 钉住 sshd-lite 版本，由 Renovate 更新
 - `bench/forward` — TCP 转发性能对照工具（splice / buffer / peek 三种模式）
 - `config/start.sh` — 裸机启动脚本（source lib/ 共享库）
 - `config/systemd/rw-node.service` — systemd 服务定义
@@ -140,6 +142,7 @@ PaaS 版额外变量：
 - `SSH_HOST_KEY` — 可选，固定 host key 内容（PEM），避免容器重启后客户端报 host key 变化
 - `SSH_HOST_KEY_SEED` — 可选，host key 种子；设置后 sshd-lite 直接由它派生 host key 且不落盘，优先级高于 `SSH_HOST_KEY`。种子等价于 host key 本身，需用 `openssl rand -hex 32` 这类高熵值
 - `SSHD_LITE_BIN` — 可选，指定已有 sshd-lite 二进制路径（设置后不下载）
+- `SSHD_LITE_VERSION` — 可选，指定要安装的 sshd-lite 版本；不设置时跟随最新 release。已装版本记在 `.rw-node/.sshd-lite-version`，与目标版本不一致时重新下载覆盖（front/rw-node-go 目前仍是「有文件即跳过」，不做版本比对）
 
 ## 注意事项
 
