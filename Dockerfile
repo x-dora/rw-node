@@ -8,7 +8,7 @@
 
 # geocheck binary for the node stats/get-geocheck route, matching the official
 # node image layout (/usr/local/bin/geocheck).
-FROM --platform=$BUILDPLATFORM alpine:3.23 AS geocheck
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS geocheck
 
 ARG GEOCHECK_VERSION=0.3.0
 ARG GEOCHECK_RELEASE_URL=https://github.com/remnawave/geocheck/releases/download
@@ -24,7 +24,7 @@ RUN apk add --no-cache curl \
     && install -m 0755 geocheck /usr/local/bin/geocheck \
     && rm -rf /tmp/*
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 ARG RW_NODE_GO_REPO=x-dora/rw-node-go
 ARG RW_NODE_GO_VERSION=latest
