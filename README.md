@@ -76,8 +76,19 @@ Release workflow 也会发布固定版本标签：
 | `INTERNAL_REST_PORT` | Internal REST 内部端口，不要公开 | `61001` |
 | `NODE_TLS_CLIENT_AUTH` | TLS 客户端证书策略，PaaS 常用 `none` | `mtls` |
 | `RW_NODE_DIR` | 脚本安装时的工作目录 | `/opt/rw-node` |
+| `HYSTERIA_LISTEN_PORT` | 覆盖面板下发的 hysteria 端口；未设置时若存在 `PORT` 则自动跟随 `HTTP_FRONT_PORT` | 面板值 |
 
 PaaS 镜像还支持 `PORT`、`HTTP_FRONT_ENABLED`、`HTTP_FRONT_PORT`、`XHTTP_UPSTREAM_PORT`、`WS_UPSTREAM_PORT`、`CADDY_INDEX_PAGE`、`CADDY_DEFAULT_SITE_DIR`、`RW_NODE_APP_DIR` 等变量，见 [PaaS HTTPS 直连文档](docs/paas.md)。
+
+### 单端口 PaaS 上跑 Hysteria
+
+平台只映射一个端口时，`HTTP_FRONT_PORT` 已经占掉了它。Hysteria 走 QUIC（UDP），与前置分流器的同名 TCP 端口不冲突，所以直接复用同一个端口号即可：启动脚本检测到 `PORT` 就自动把 `HYSTERIA_LISTEN_PORT` 设成 `HTTP_FRONT_PORT`，无需手工配置。裸 VPS 上不存在 `PORT`，行为不变。
+
+覆盖后：
+
+- 面板里 inbound 的 `port` 不再生效，本节点实际监听的是 `HYSTERIA_LISTEN_PORT`；
+- 面板里必须**单独建一条 Host**，`address:port` 写这个端口。共用原端口的那条 Host 会把客户端指向没映射的端口；
+- 客户端 MTU 要压到 1400 以下——PaaS 网络常见 1500 字节以上整包丢弃，表现是能连上但打不开网页。
 
 ## 重要注意事项
 

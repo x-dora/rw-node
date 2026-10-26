@@ -169,12 +169,21 @@ set_default_env() {
   [[ -v SSH_PORT ]]               || SSH_PORT=22222
   [[ -v SSH_HOST_KEY ]]           || SSH_HOST_KEY=
 
+  # 单端口 PaaS：平台只映射一个端口（PORT），hysteria 的 QUIC 只能复用同一个端口号
+  # ——它走 UDP，与 front 占用的同名 TCP 端口不冲突。判据是 PORT 是否存在
+  # （PaaS 注入、裸 VPS 没有），取值用 front 实际监听的 HTTP_FRONT_PORT，
+  # 这样显式改过 HTTP_FRONT_PORT 的部署也对得上。裸 VPS 保持面板下发的原端口。
+  if [[ ! -v HYSTERIA_LISTEN_PORT ]] && [[ -n "${PORT:-}" ]]; then
+    HYSTERIA_LISTEN_PORT="$HTTP_FRONT_PORT"
+  fi
+
   export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
   export RW_NODE_DIR XRAY_LOCATION_ASSET HTTP_FRONT_PORT HTTP_FRONT_HOST XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT
   export HTTP_FRONT_ENABLED FRONT_INDEX_PAGE FRONT_SITE_DIR FRONT_DEFAULT_SITE_DIR
   export INBOUND_WATCHER_ENABLED INBOUND_WATCHER_INTERVAL
   export ARGO_TOKEN ARGO_LOG_LEVEL
   export SSH_ENABLED SSH_PORT SSH_HOST_KEY SSH_AUTHORIZED_KEYS
+  export HYSTERIA_LISTEN_PORT
 }
 
 is_port() {
@@ -194,6 +203,11 @@ validate_ports() {
     for name in NODE_PORT HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT; do
       [[ "${SSH_PORT}" != "${!name}" ]] || fail "SSH_PORT must differ from ${name}"
     done
+  fi
+
+  # HYSTERIA_LISTEN_PORT 走 UDP，允许与上面任何一个 TCP 端口同号。
+  if [[ -n "${HYSTERIA_LISTEN_PORT:-}" ]]; then
+    is_port "${HYSTERIA_LISTEN_PORT}" || fail "HYSTERIA_LISTEN_PORT must be a valid UDP port"
   fi
 }
 
