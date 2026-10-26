@@ -198,7 +198,10 @@ XHTTP_UPSTREAM_PORT=8080
 WS_UPSTREAM_PORT=8880
 SSH_ENABLED=false
 SSH_PORT=22222
+HYSTERIA_LISTEN_PORT=${PORT:+$HTTP_FRONT_PORT}
 ```
+
+`HYSTERIA_LISTEN_PORT` 只在平台注入 `PORT`（即单端口 PaaS）时自动设成 `HTTP_FRONT_PORT`，裸 VPS 上留空、继续用面板下发的端口。它只改 hysteria inbound 的监听端口：QUIC 走 UDP，与前置分流器占用的同名 TCP 端口不冲突，所以单端口 PaaS 上 `hy2` 依然能直接暴露。也可以在 `.env` 里显式指定，显式值优先。
 
 可以设置 `RW_NODE_GO_VERSION` 安装指定 `x-dora/rw-node-go` release。未设置时，启动入口使用 GitHub latest release。
 
